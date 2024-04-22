@@ -22,7 +22,7 @@ require (
 	github.com/davecgh/go-spew v1.1.1
 	github.com/deckarep/golang-set/v2 v2.1.0
 	github.com/dop251/goja v0.0.0-20230806174421-c933cf95e127
-	github.com/ethereum-optimism/superchain-registry/superchain v0.0.0-20240318114348-52d3dbd1605d
+	github.com/ethereum-optimism/superchain-registry/superchain v0.0.0-20240422204504-1e64c6010181
 	github.com/ethereum/c-kzg-4844 v0.4.0
 	github.com/fatih/color v1.13.0
 	github.com/fjl/gencodec v0.0.0-20230517082657-f9840df7b83e
@@ -146,4 +146,4 @@ require (
 	rsc.io/tmplfunc v0.0.3 // indirect
 )
 
-//replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
+// replace github.com/ethereum-optimism/superchain-registry/superchain => ../superchain-registry/superchain
