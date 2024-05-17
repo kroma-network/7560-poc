@@ -172,6 +172,7 @@ var (
 		EIP150Block:                   big.NewInt(0),
 		EIP155Block:                   big.NewInt(0),
 		EIP158Block:                   big.NewInt(0),
+		RIP7560Block:                  big.NewInt(0),
 		ByzantiumBlock:                big.NewInt(0),
 		ConstantinopleBlock:           big.NewInt(0),
 		PetersburgBlock:               big.NewInt(0),
@@ -370,6 +371,8 @@ type ChainConfig struct {
 	EIP155Block *big.Int `json:"eip155Block,omitempty"` // EIP155 HF block
 	EIP158Block *big.Int `json:"eip158Block,omitempty"` // EIP158 HF block
 
+	RIP7560Block *big.Int `json:"rip7560block,omitempty"` // RIP7560 HF block
+
 	ByzantiumBlock      *big.Int `json:"byzantiumBlock,omitempty"`      // Byzantium switch block (nil = no fork, 0 = already on byzantium)
 	ConstantinopleBlock *big.Int `json:"constantinopleBlock,omitempty"` // Constantinople switch block (nil = no fork, 0 = already activated)
 	PetersburgBlock     *big.Int `json:"petersburgBlock,omitempty"`     // Petersburg switch block (nil = same as Constantinople)
@@ -412,6 +415,10 @@ type ChainConfig struct {
 
 	// Optimism config, nil if not active
 	Optimism *OptimismConfig `json:"optimism,omitempty"`
+
+	// RIP-7560 specific config parameters
+	EntryPointAddress     common.Address `json:"entryPointAddress,omitempty"`
+	DeployerCallerAddress common.Address `json:"deployerCallerAddress,omitempty"`
 }
 
 // EthashConfig is the consensus engine configs for proof-of-work based sealing.
@@ -708,6 +715,11 @@ func (c *ChainConfig) IsOptimismFjord(time uint64) bool {
 // IsOptimismPreBedrock returns true iff this is an optimism node & bedrock is not yet active
 func (c *ChainConfig) IsOptimismPreBedrock(num *big.Int) bool {
 	return c.IsOptimism() && !c.IsBedrock(num)
+}
+
+// IsRIP7560 returns whether num is either equal to the RIP7560 fork block or greater.
+func (c *ChainConfig) IsRIP7560(num *big.Int) bool {
+	return isBlockForked(c.RIP7560Block, num)
 }
 
 // CheckCompatible checks whether scheduled fork transitions have been imported
