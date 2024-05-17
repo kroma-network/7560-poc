@@ -74,6 +74,16 @@ type TransactionArgs struct {
 
 	// This configures whether blobs are allowed to be passed.
 	blobSidecarAllowed bool
+
+	// Introduced by RIP-7560 Transaction
+	Subtype       *hexutil.Uint64
+	Sender        *common.Address `json:"sender"`
+	Signature     *hexutil.Bytes
+	PaymasterData *hexutil.Bytes `json:"paymasterData"`
+	DeployerData  *hexutil.Bytes
+	BuilderFee    *hexutil.Big
+	ValidationGas *hexutil.Uint64
+	PaymasterGas  *hexutil.Uint64
 }
 
 // from retrieves the transaction sender address.
@@ -459,6 +469,33 @@ func (args *TransactionArgs) ToMessage(globalGasCap uint64, baseFee *big.Int) (*
 func (args *TransactionArgs) toTransaction() *types.Transaction {
 	var data types.TxData
 	switch {
+	case args.Sender != nil:
+		al := types.AccessList{}
+		if args.AccessList != nil {
+			al = *args.AccessList
+		}
+		aatx := types.Rip7560AccountAbstractionTx{
+			Subtype:    byte(*args.Subtype),
+			To:         &common.Address{},
+			ChainID:    (*big.Int)(args.ChainID),
+			Gas:        uint64(*args.Gas),
+			GasFeeCap:  (*big.Int)(args.MaxFeePerGas),
+			GasTipCap:  (*big.Int)(args.MaxPriorityFeePerGas),
+			Value:      (*big.Int)(args.Value),
+			Data:       args.data(),
+			AccessList: al,
+			// RIP-7560 parameters
+			Sender:        args.Sender,
+			Signature:     *args.Signature,
+			PaymasterData: *args.PaymasterData,
+			DeployerData:  *args.DeployerData,
+			BuilderFee:    (*big.Int)(args.BuilderFee),
+			ValidationGas: uint64(*args.ValidationGas),
+			PaymasterGas:  uint64(*args.PaymasterGas),
+		}
+		data = &aatx
+		hash := types.NewTx(data).Hash()
+		log.Error("RIP-7560 transaction created", "sender", aatx.Sender.Hex(), "hash", hash)
 	case args.BlobHashes != nil:
 		al := types.AccessList{}
 		if args.AccessList != nil {

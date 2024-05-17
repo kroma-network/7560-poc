@@ -21,6 +21,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/ethereum/go-ethereum/core/txpool/rip7560pool"
 	"math/big"
 	"runtime"
 	"sync"
@@ -263,6 +264,14 @@ func New(stack *node.Node, config *ethconfig.Config) (*Ethereum, error) {
 		blobPool := blobpool.New(config.BlobPool, eth.blockchain)
 		txPools = append(txPools, blobPool)
 	}
+
+	rip7560PoolConfig := rip7560pool.Config{
+		MaxBundleGas:  10000000,
+		MaxBundleSize: 100,
+	}
+	rip7560Pool := rip7560pool.New(rip7560PoolConfig, eth.blockchain, config.Miner.Etherbase)
+	txPools = append(txPools, rip7560Pool)
+
 	eth.txPool, err = txpool.New(config.TxPool.PriceLimit, eth.blockchain, txPools)
 	if err != nil {
 		return nil, err
