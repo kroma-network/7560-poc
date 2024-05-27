@@ -28,7 +28,6 @@ const ScaTransactionSubtype = 0x01
 
 // Rip7560AccountAbstractionTx represents an RIP-7560 transaction.
 type Rip7560AccountAbstractionTx struct {
-	Subtype byte
 	// overlapping fields
 	ChainID    *big.Int
 	GasTipCap  *big.Int // a.k.a. maxPriorityFeePerGas
@@ -38,6 +37,7 @@ type Rip7560AccountAbstractionTx struct {
 	AccessList AccessList
 
 	// extra fields
+	Subtype       uint64
 	Sender        *common.Address
 	Signature     []byte
 	PaymasterData []byte
@@ -76,6 +76,7 @@ func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 		BuilderFee:    new(big.Int),
 		ValidationGas: tx.ValidationGas,
 		PaymasterGas:  tx.PaymasterGas,
+		PostOpGas:     tx.PostOpGas,
 	}
 	copy(cpy.AccessList, tx.AccessList)
 	if tx.Value != nil {
@@ -146,6 +147,7 @@ type Rip7560Transaction struct {
 	Nonce                *big.Int
 	ValidationGasLimit   *big.Int
 	PaymasterGasLimit    *big.Int
+	PostOpGasLimit       *big.Int
 	CallGasLimit         *big.Int
 	MaxFeePerGas         *big.Int
 	MaxPriorityFeePerGas *big.Int
@@ -162,6 +164,7 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		{Name: "nonce", Type: "uint256"},
 		{Name: "validationGasLimit", Type: "uint256"},
 		{Name: "paymasterGasLimit", Type: "uint256"},
+		{Name: "postOpGas", Type: "uint256"},
 		{Name: "callGasLimit", Type: "uint256"},
 		{Name: "maxFeePerGas", Type: "uint256"},
 		{Name: "maxPriorityFeePerGas", Type: "uint256"},
@@ -180,6 +183,7 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		Nonce:                big.NewInt(int64(tx.Nonce)),
 		ValidationGasLimit:   big.NewInt(int64(tx.ValidationGas)),
 		PaymasterGasLimit:    big.NewInt(int64(tx.PaymasterGas)),
+		PostOpGasLimit:       big.NewInt(int64(tx.PostOpGas)),
 		CallGasLimit:         big.NewInt(int64(tx.Gas)),
 		MaxFeePerGas:         tx.GasFeeCap,
 		MaxPriorityFeePerGas: tx.GasTipCap,
