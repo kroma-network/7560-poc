@@ -212,6 +212,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(DynamicFeeTx)
 	case BlobTxType:
 		inner = new(BlobTx)
+	case Rip7560Type:
+		inner = new(Rip7560AccountAbstractionTx)
 	case DepositTxType:
 		inner = new(DepositTx)
 	default:
@@ -359,6 +361,71 @@ func (tx *Transaction) IsDepositTx() bool {
 // are executed in an unmetered environment & do not contribute to the block gas limit.
 func (tx *Transaction) IsSystemTx() bool {
 	return tx.inner.isSystemTx()
+}
+
+// RIP-7560 support
+func (tx *Transaction) SubType() uint64 {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.Subtype
+	}
+	// TODO : handle case
+	return 0
+}
+
+func (tx *Transaction) Sender() *common.Address {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.Sender
+	}
+	return nil
+}
+
+func (tx *Transaction) Signature() []byte {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.Signature
+	}
+	return nil
+}
+
+func (tx *Transaction) PaymasterData() []byte {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.PaymasterData
+	}
+	return nil
+}
+
+func (tx *Transaction) DeployerData() []byte {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.DeployerData
+	}
+	return nil
+}
+
+func (tx *Transaction) BuilderFee() *big.Int {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.BuilderFee
+	}
+	return nil
+}
+
+func (tx *Transaction) ValidationGas() uint64 {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.ValidationGas
+	}
+	return 0
+}
+
+func (tx *Transaction) PaymasterGas() uint64 {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.PaymasterGas
+	}
+	return 0
+}
+
+func (tx *Transaction) PostOpGas() uint64 {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.PostOpGas
+	}
+	return 0
 }
 
 // Cost returns (gas * gasPrice) + (blobGas * blobGasPrice) + value.

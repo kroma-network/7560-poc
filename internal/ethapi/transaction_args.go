@@ -76,14 +76,15 @@ type TransactionArgs struct {
 	blobSidecarAllowed bool
 
 	// Introduced by RIP-7560 Transaction
-	Subtype       *hexutil.Uint64
+	Subtype       *hexutil.Uint64 `json:"subType"`
 	Sender        *common.Address `json:"sender"`
-	Signature     *hexutil.Bytes
-	PaymasterData *hexutil.Bytes `json:"paymasterData"`
-	DeployerData  *hexutil.Bytes
-	BuilderFee    *hexutil.Big
-	ValidationGas *hexutil.Uint64
-	PaymasterGas  *hexutil.Uint64
+	Signature     *hexutil.Bytes  `json:"signature"`
+	PaymasterData *hexutil.Bytes  `json:"paymasterData"`
+	DeployerData  *hexutil.Bytes  `json:"deployerData"`
+	BuilderFee    *hexutil.Big    `json:"builderFee"`
+	ValidationGas *hexutil.Uint64 `json:"validationGas"`
+	PaymasterGas  *hexutil.Uint64 `json:"paymasterGas"`
+	PostOpGas     *hexutil.Uint64 `json:"postOpGas"`
 }
 
 // from retrieves the transaction sender address.
@@ -475,7 +476,7 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			al = *args.AccessList
 		}
 		aatx := types.Rip7560AccountAbstractionTx{
-			Subtype:    byte(*args.Subtype),
+			Subtype:    uint64(*args.Subtype),
 			To:         &common.Address{},
 			ChainID:    (*big.Int)(args.ChainID),
 			Gas:        uint64(*args.Gas),
@@ -492,6 +493,7 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			BuilderFee:    (*big.Int)(args.BuilderFee),
 			ValidationGas: uint64(*args.ValidationGas),
 			PaymasterGas:  uint64(*args.PaymasterGas),
+			PostOpGas:     uint64(*args.PostOpGas),
 		}
 		data = &aatx
 		hash := types.NewTx(data).Hash()
