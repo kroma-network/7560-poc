@@ -56,8 +56,9 @@ func (pool *Rip7560BundlerPool) Reset(oldHead, newHead *types.Header) {
 
 	pendingBundles := make([]*types.ExternallyReceivedBundle, 0, len(pool.pendingBundles))
 	for _, bundle := range pool.pendingBundles {
-		nextBlock := big.NewInt(0).Add(newHead.Number, big.NewInt(1))
-		if bundle.ValidForBlock.Cmp(nextBlock) == 0 {
+		//TODO : is this needed?
+		//nextBlock := big.NewInt(0).Add(newHead.Number, big.NewInt(1))
+		if bundle.ValidForBlock.Cmp(newHead.Number) == 0 {
 			pendingBundles = append(pendingBundles, bundle)
 		}
 	}
@@ -70,10 +71,11 @@ func (pool *Rip7560BundlerPool) gatherIncludedBundlesStats(newHead *types.Header
 	// 1. Is there a bundle included in the block?
 
 	// note that in 'clique' mode Coinbase is always set to 0x000...000
-	if newHead.Coinbase.Cmp(pool.coinbase) != 0 && newHead.Coinbase.Cmp(common.Address{}) != 0 {
-		// not our block
-		return nil
-	}
+	//TODO : temporary comment this block for test
+	//if newHead.Coinbase.Cmp(pool.coinbase) != 0 && newHead.Coinbase.Cmp(common.Address{}) != 0 {
+	//	// not our block
+	//	return nil
+	//}
 
 	// get all transaction hashes in block
 	add := pool.chain.GetBlock(newHead.Hash(), newHead.Number.Uint64())
@@ -246,11 +248,16 @@ func (pool *Rip7560BundlerPool) SubmitRip7560Bundle(bundle *types.ExternallyRece
 
 	currentBlock := pool.currentHead.Load().Number
 	nextBlock := big.NewInt(0).Add(currentBlock, big.NewInt(1))
+	//TODO : temporary code for test
+	bundle.ValidForBlock = nextBlock
 	log.Error("RIP-7560 bundle submitted", "validForBlock", bundle.ValidForBlock.String(), "nextBlock", nextBlock.String())
 	pool.pendingBundles = append(pool.pendingBundles, bundle)
-	if nextBlock.Cmp(bundle.ValidForBlock) == 0 {
-		pool.txFeed.Send(core.NewTxsEvent{Txs: bundle.Transactions})
-	}
+
+	//TODO : temporary comment this block for test
+	pool.txFeed.Send(core.NewTxsEvent{Txs: bundle.Transactions})
+	//if nextBlock.Cmp(bundle.ValidForBlock) == 0 {
+	//	pool.txFeed.Send(core.NewTxsEvent{Txs: bundle.Transactions})
+	//}
 	return nil
 }
 
