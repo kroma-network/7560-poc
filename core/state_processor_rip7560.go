@@ -83,6 +83,12 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		if err != nil {
 			return nil, nil, nil, err
 		}
+
+		err = RefundGasRip7560Transaction(aatx, statedb, receipt.CumulativeGasUsed)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
@@ -96,7 +102,7 @@ func BuyGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.St
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas
 	mgval := new(uint256.Int).SetUint64(gasLimit)
 	gasFeeCap, _ := uint256.FromBig(st.GasFeeCap)
-	mgval = mgval.Mul(mgval, gasFeeCap)
+	mgval = mgval.Mul(mgval, gasFeeCap).Add(mgval, new(uint256.Int).SetUint64(params.Tx7560BaseGas))
 	balanceCheck := new(uint256.Int).Set(mgval)
 
 	chargeFrom := *st.Sender
@@ -110,6 +116,24 @@ func BuyGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.St
 	}
 
 	state.SubBalance(chargeFrom, mgval)
+	return nil
+}
+
+// TODO: move to a suitable interface, with BuyGasRip7560Transaction
+func RefundGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.StateDB, usedGas uint64) error {
+	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas
+	mgval := new(uint256.Int).SetUint64(gasLimit)
+	gasFeeCap, _ := uint256.FromBig(st.GasFeeCap)
+	mgval = mgval.Mul(mgval, gasFeeCap).Add(mgval, new(uint256.Int).SetUint64(params.Tx7560BaseGas))
+	usedval := new(uint256.Int).SetUint64(usedGas)
+
+	chargeFrom := *st.Sender
+
+	if len(st.PaymasterData) >= 20 {
+		chargeFrom = [20]byte(st.PaymasterData[:20])
+	}
+
+	state.AddBalance(chargeFrom, mgval.Sub(mgval, usedval))
 	return nil
 }
 
@@ -235,7 +259,6 @@ func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *Exec
 }
 
 func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config) (*types.Receipt, error) {
-
 	// TODO: snapshot EVM - we will revert back here if postOp fails
 
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
@@ -249,6 +272,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if err != nil {
 		return nil, err
 	}
+
 	root := statedb.IntermediateRoot(true).Bytes()
 	var paymasterPostOpResult *ExecutionResult
 	if len(vpr.PaymasterContext) != 0 {
