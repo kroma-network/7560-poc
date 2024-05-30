@@ -46,6 +46,7 @@ type Rip7560AccountAbstractionTx struct {
 	ValidationGas uint64
 	PaymasterGas  uint64
 	PostOpGas     uint64
+	AaNonce       *big.Int
 
 	// removed fields
 	To    *common.Address
@@ -77,6 +78,7 @@ func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 		ValidationGas: tx.ValidationGas,
 		PaymasterGas:  tx.PaymasterGas,
 		PostOpGas:     tx.PostOpGas,
+		AaNonce:       tx.AaNonce,
 	}
 	copy(cpy.AccessList, tx.AccessList)
 	if tx.Value != nil {
@@ -180,7 +182,7 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 	}
 	record := &Rip7560Transaction{
 		Sender:               *tx.Sender,
-		Nonce:                big.NewInt(int64(tx.Nonce)),
+		Nonce:                tx.AaNonce,
 		ValidationGasLimit:   big.NewInt(int64(tx.ValidationGas)),
 		PaymasterGasLimit:    big.NewInt(int64(tx.PaymasterGas)),
 		PostOpGasLimit:       big.NewInt(int64(tx.PostOpGas)),
