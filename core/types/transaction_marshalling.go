@@ -63,7 +63,7 @@ type txJSON struct {
 	Commitments []kzg4844.Commitment `json:"commitments,omitempty"`
 	Proofs      []kzg4844.Proof      `json:"proofs,omitempty"`
 
-	// RIP 7560 transaction fileds
+	// RIP 7560 transaction fields
 	SubType       *hexutil.Uint64 `json:"subType,omitempty"`
 	Sender        *common.Address `json:"sender,omitempty"`
 	Signature     *hexutil.Bytes  `json:"signature,omitempty"`
@@ -73,6 +73,9 @@ type txJSON struct {
 	ValidationGas *hexutil.Uint64 `json:"validationGas,omitempty"`
 	PaymasterGas  *hexutil.Uint64 `json:"PaymasterGas,omitempty"`
 	PostOpGas     *hexutil.Uint64 `json:"PostOpGas,omitempty"`
+
+	// RIP 7712 additional transaction field
+	AaNonce *hexutil.Big `json:"aaNonce,omitempty"`
 
 	// Only used for encoding:
 	Hash common.Hash `json:"hash"`
@@ -205,6 +208,7 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.ValidationGas = (*hexutil.Uint64)(&itx.ValidationGas)
 		enc.PaymasterGas = (*hexutil.Uint64)(&itx.PaymasterGas)
 		enc.PostOpGas = (*hexutil.Uint64)(&itx.PostOpGas)
+		enc.AaNonce = (*hexutil.Big)(itx.AaNonce)
 		enc.To = tx.To()
 		enc.Nonce = (*hexutil.Uint64)(&itx.Nonce)
 		enc.Value = (*hexutil.Big)(itx.Value)
@@ -575,6 +579,7 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'postOpGas' for txdata")
 		}
 		itx.PostOpGas = uint64(*dec.PostOpGas)
+		itx.AaNonce = (*big.Int)(dec.AaNonce)
 		if dec.To != nil {
 			itx.To = dec.To
 		}

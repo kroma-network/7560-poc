@@ -16,17 +16,18 @@ import (
 )
 
 type ValidationPhaseResult struct {
-	TxIndex             int
-	Tx                  *types.Transaction
-	TxHash              common.Hash
-	PaymasterContext    []byte
-	DeploymentUsedGas   uint64
-	ValidationUsedGas   uint64
-	PmValidationUsedGas uint64
-	SenderValidAfter    uint64
-	SenderValidUntil    uint64
-	PmValidAfter        uint64
-	PmValidUntil        uint64
+	TxIndex                int
+	Tx                     *types.Transaction
+	TxHash                 common.Hash
+	PaymasterContext       []byte
+	NonceValidationUsedGas uint64
+	DeploymentUsedGas      uint64
+	ValidationUsedGas      uint64
+	PmValidationUsedGas    uint64
+	SenderValidAfter       uint64
+	SenderValidUntil       uint64
+	PmValidAfter           uint64
+	PmValidUntil           uint64
 }
 
 // HandleRip7560Transactions apply state changes of all sequential RIP-7560 transactions and return
@@ -158,8 +159,30 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	txContext := NewEVMTxContext(stubMsg)
 	txContext.Origin = *tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
+	/*** Nonce Validation Frame ***/
+	nonceValidationMsg, err := prepareNonceValidationMessage(tx, chainConfig)
+	var nonceValidationUsedGas uint64
+	if nonceValidationMsg != nil {
+		resultNonceValidation, err := ApplyRip7560FrameMessage(evm, nonceValidationMsg, gp)
+		if err != nil && errors.Is(err, vm.ErrExecutionReverted) {
+			return nil, err
+		}
+		statedb.IntermediateRoot(true)
+		if resultNonceValidation.Failed() {
+			return nil, errors.New("nonce validation failed - invalid transaction")
+		}
+		nonceValidationUsedGas = resultNonceValidation.UsedGas
+	} else {
+		currentNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
+		if currentNonce != tx.Rip7560TransactionData().AaNonce.Uint64() {
+			return nil, errors.New("nonce validation failed - invalid transaction")
+		}
+		nonceValidationUsedGas = 0
+		statedb.SetNonce(*tx.Rip7560TransactionData().Sender, currentNonce+1)
+	}
+
 	/*** Deployer Frame ***/
-	deployerMsg := prepareDeployerMessage(tx, chainConfig)
+	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas)
 	var deploymentUsedGas uint64
 	if deployerMsg != nil {
 		resultDeployer, err := ApplyRip7560FrameMessage(evm, deployerMsg, gp)
@@ -177,7 +200,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	/*** Account Validation Frame ***/
 	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
 	signingHash := signer.Hash(tx)
-	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, deploymentUsedGas)
+	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas)
 	resultAccountValidation, err := ApplyRip7560FrameMessage(evm, accountValidationMsg, gp)
 	if err != nil {
 		return nil, err
@@ -197,16 +220,17 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 
 	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header)
 	vpr := &ValidationPhaseResult{
-		Tx:                  tx,
-		TxHash:              tx.Hash(),
-		PaymasterContext:    paymasterContext,
-		DeploymentUsedGas:   deploymentUsedGas,
-		ValidationUsedGas:   resultAccountValidation.UsedGas,
-		PmValidationUsedGas: pmValidationUsedGas,
-		SenderValidAfter:    validAfter,
-		SenderValidUntil:    validUntil,
-		PmValidAfter:        pmValidAfter,
-		PmValidUntil:        pmValidUntil,
+		Tx:                     tx,
+		TxHash:                 tx.Hash(),
+		PaymasterContext:       paymasterContext,
+		NonceValidationUsedGas: nonceValidationUsedGas,
+		DeploymentUsedGas:      deploymentUsedGas,
+		ValidationUsedGas:      resultAccountValidation.UsedGas,
+		PmValidationUsedGas:    pmValidationUsedGas,
+		SenderValidAfter:       validAfter,
+		SenderValidUntil:       validUntil,
+		PmValidAfter:           pmValidAfter,
+		PmValidUntil:           pmValidUntil,
 	}
 
 	return vpr, nil
@@ -320,7 +344,39 @@ func prepareStubMessage(baseTx *types.Transaction, chainConfig *params.ChainConf
 	}
 }
 
-func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig) *Message {
+func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) (*Message, error) {
+	tx := baseTx.Rip7560TransactionData()
+	if tx.AaNonce.Cmp(new(big.Int).Lsh(big.NewInt(1), 64)) <= 0 {
+		return nil, nil
+	}
+	addressType, _ := abi.NewType("address", "", nil)
+	uint256Type, _ := abi.NewType("uint256", "", nil)
+	arguments := abi.Arguments{
+		{Type: addressType, Name: "sender"},
+		{Type: uint256Type, Name: "nonce"},
+	}
+
+	validateIncrementData, err := arguments.Pack(tx.Sender, tx.AaNonce)
+	validateIncrementData = validateIncrementData[12:] // remove the zero-padded prefix
+	if err != nil {
+		return nil, err
+	}
+	return &Message{
+		From:              chainConfig.EntryPointAddress,
+		To:                &chainConfig.NonceManagerAddress,
+		Value:             big.NewInt(0),
+		GasLimit:          tx.ValidationGas,
+		GasPrice:          tx.GasFeeCap,
+		GasFeeCap:         tx.GasFeeCap,
+		GasTipCap:         tx.GasTipCap,
+		Data:              validateIncrementData,
+		AccessList:        make(types.AccessList, 0),
+		SkipAccountChecks: true,
+		IsRip7560Frame:    true,
+	}, nil
+}
+
+func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64) *Message {
 	tx := baseTx.Rip7560TransactionData()
 	if len(tx.DeployerData) < 20 {
 		return nil
@@ -330,7 +386,7 @@ func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfi
 		From:              config.DeployerCallerAddress,
 		To:                &deployerAddress,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.ValidationGas,
+		GasLimit:          tx.ValidationGas - nonceValidationUsedGas,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -341,7 +397,7 @@ func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfi
 	}
 }
 
-func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, deploymentUsedGas uint64) (*Message, error) {
+func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, nonceValidationUsedGas, deploymentUsedGas uint64) (*Message, error) {
 	tx := baseTx.Rip7560TransactionData()
 	jsondata := `[
 	{"type":"function","name":"validateTransaction","inputs": [{"name": "version","type": "uint256"},{"name": "txHash","type": "bytes32"},{"name": "transaction","type": "bytes"}]}
@@ -357,7 +413,7 @@ func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *par
 		From:              chainConfig.EntryPointAddress,
 		To:                tx.Sender,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.ValidationGas - deploymentUsedGas,
+		GasLimit:          tx.ValidationGas - nonceValidationUsedGas - deploymentUsedGas,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -480,8 +536,8 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 	if magicExpected != MAGIC_VALUE_SENDER {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
-	validAfter := binary.BigEndian.Uint64(data[4:12])
-	validUntil := binary.BigEndian.Uint64(data[12:20])
+	validUntil := binary.BigEndian.Uint64(data[4:12])
+	validAfter := binary.BigEndian.Uint64(data[12:20])
 	return validAfter, validUntil, nil
 }
 
