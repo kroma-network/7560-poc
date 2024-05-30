@@ -428,6 +428,13 @@ func (tx *Transaction) PostOpGas() uint64 {
 	return 0
 }
 
+func (tx *Transaction) AaNonce() *big.Int {
+	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
+		return dep.AaNonce
+	}
+	return nil
+}
+
 // Cost returns (gas * gasPrice) + (blobGas * blobGasPrice) + value.
 func (tx *Transaction) Cost() *big.Int {
 	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))

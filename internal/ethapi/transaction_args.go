@@ -70,6 +70,7 @@ type TransactionArgs struct {
 	ValidationGas *hexutil.Uint64 `json:"validationGas"`
 	PaymasterGas  *hexutil.Uint64 `json:"paymasterGas"`
 	PostOpGas     *hexutil.Uint64 `json:"postOpGas"`
+	AaNonce       *hexutil.Big    `json:"aaNonce"`
 }
 
 // from retrieves the transaction sender address.
@@ -380,6 +381,8 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			ValidationGas: uint64(*args.ValidationGas),
 			PaymasterGas:  uint64(*args.PaymasterGas),
 			PostOpGas:     uint64(*args.PostOpGas),
+			// RIP-7712 parameter
+			AaNonce: (*big.Int)(args.AaNonce),
 		}
 		data = &aatx
 		hash := types.NewTx(data).Hash()
