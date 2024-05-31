@@ -495,30 +495,33 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 
 func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 	MAGIC_VALUE_PAYMASTER := uint32(0xe0e6183a)
-	if len(data) < 4 {
-		return nil, 0, 0, errors.New("invalid paymaster return data length")
-	}
-	magicExpected := binary.BigEndian.Uint32(data[:4])
-	if magicExpected != MAGIC_VALUE_PAYMASTER {
-		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
-	}
-
 	jsondata := `[
-			{"type":"function","name":"validatePaymasterTransaction","outputs": [{"name": "context","type": "bytes"},{"name": "validUntil","type": "uint256"},{"name": "validAfter","type": "uint256"}]}
-		]`
+		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
+	]`
 	validatePaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
 	if err != nil {
 		// todo: wrap error message
 		return nil, 0, 0, err
 	}
-	decodedPmReturnData, err := validatePaymasterTransactionAbi.Unpack("validatePaymasterTransaction", data[4:])
+
+	var validatePaymasterResult struct {
+		ValidationData [32]byte
+		Context        []byte
+	}
+
+	err = validatePaymasterTransactionAbi.UnpackIntoInterface(&validatePaymasterResult, "validatePaymasterTransaction", data)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	context := decodedPmReturnData[0].([]byte)
-	validAfter := decodedPmReturnData[1].(*big.Int)
-	validUntil := decodedPmReturnData[2].(*big.Int)
-	return context, validAfter.Uint64(), validUntil.Uint64(), nil
+	magicExpected := binary.BigEndian.Uint32(validatePaymasterResult.ValidationData[:4])
+	if magicExpected != MAGIC_VALUE_PAYMASTER {
+		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
+	}
+	validAfter := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
+	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[12:20])
+	context := validatePaymasterResult.Context
+
+	return context, validAfter, validUntil, nil
 }
 
 func validateValidityTimeRange(time uint64, validAfter uint64, validUntil uint64) error {
