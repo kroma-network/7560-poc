@@ -226,6 +226,7 @@ type StateTransition struct {
 	initialGas   uint64
 	state        vm.StateDB
 	evm          *vm.EVM
+	rip7560From  *common.Address
 	rip7560Frame bool
 }
 
@@ -516,8 +517,10 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 	if contractCreation {
 		ret, _, st.gasRemaining, vmerr = st.evm.Create(sender, msg.Data, st.gasRemaining, value)
 	} else {
-		// Increment the nonce for the next transaction
-		st.state.SetNonce(msg.From, st.state.GetNonce(sender.Address())+1)
+		if !msg.IsRip7560Frame {
+			// Increment the nonce for the next transaction
+			st.state.SetNonce(msg.From, st.state.GetNonce(sender.Address())+1)
+		}
 		ret, st.gasRemaining, vmerr = st.evm.Call(sender, st.to(), msg.Data, st.gasRemaining, value)
 	}
 
@@ -609,7 +612,11 @@ func (st *StateTransition) refundGas(refundQuotient uint64) uint64 {
 	// Return ETH for remaining gas, exchanged at the original rate.
 	remaining := uint256.NewInt(st.gasRemaining)
 	remaining = remaining.Mul(remaining, uint256.MustFromBig(st.msg.GasPrice))
-	st.state.AddBalance(st.msg.From, remaining)
+	recipient := st.msg.From
+	if st.rip7560From != nil {
+		recipient = *st.rip7560From
+	}
+	st.state.AddBalance(recipient, remaining)
 
 	// Also return remaining gas to the block gas counter so it is
 	// available for the next transaction.

@@ -9,6 +9,7 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 	"math/big"
@@ -39,6 +40,7 @@ func HandleRip7560Transactions(transactions []*types.Transaction, index int, sta
 
 	iTransactions, iReceipts, iLogs, err := handleRip7560Transactions(transactions, index, statedb, coinbase, header, gp, chainConfig, bc, cfg)
 	if err != nil {
+		log.Error("Failed to handleRip7560Transactions", "err", err)
 		return nil, nil, nil, err
 	}
 	validatedTransactions = append(validatedTransactions, iTransactions...)
@@ -52,22 +54,37 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	validatedTransactions := make([]*types.Transaction, 0)
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
-	for i, tx := range transactions[index:] {
+	for _, tx := range transactions[index:] {
+		// if an error occurs in the validation phase, invalidate the corresponding transaction and state change
+		snap := statedb.Snapshot()
 		if tx.Type() != types.Rip7560Type {
-			break
+			// TODO : do we have to drop bundle?
+			continue
 		}
-
 		aatx := tx.Rip7560TransactionData()
-		statedb.SetTxContext(tx.Hash(), index+i)
-		err := BuyGasRip7560Transaction(aatx, statedb)
+		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
+
+		// calculate rollup cost
+		var l1Cost *big.Int
+		L1CostFunc := types.NewL1CostFunc(chainConfig, statedb)
+		if L1CostFunc != nil {
+			l1Cost = L1CostFunc(tx.RollupCostData(), header.Time)
+		}
+		aaFrom, err := BuyGasRip7560Transaction(aatx, statedb, l1Cost)
+		if err != nil {
+			// If an error occurs in the buyGas phase, invalidate the transaction
+			statedb.RevertToSnapshot(snap)
+			continue
+		}
 		var vpr *ValidationPhaseResult
+		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, aaFrom)
 		if err != nil {
-			return nil, nil, nil, err
+			// If an error occurs in the validation phase, invalidate the transaction
+			statedb.RevertToSnapshot(snap)
+			continue
 		}
-		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
-		if err != nil {
-			return nil, nil, nil, err
-		}
+		// update trie before execution phase
+		statedb.IntermediateRoot(true)
 		validationPhaseResults = append(validationPhaseResults, vpr)
 		validatedTransactions = append(validatedTransactions, tx)
 
@@ -78,13 +95,8 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		// TODO: this will miss all validation phase events - pass in 'vpr'
 		// statedb.SetTxContext(vpr.Tx.Hash(), i)
 
-		receipt, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg)
+		receipt, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, aaFrom)
 
-		if err != nil {
-			return nil, nil, nil, err
-		}
-
-		err = RefundGasRip7560Transaction(aatx, statedb, receipt.CumulativeGasUsed)
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -98,11 +110,13 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // BuyGasRip7560Transaction
 // todo: move to a suitable interface, whatever that is
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
-func BuyGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.StateDB) error {
+func BuyGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.StateDB, l1Cost *big.Int) (*common.Address, error) {
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas
 	mgval := new(uint256.Int).SetUint64(gasLimit)
 	gasFeeCap, _ := uint256.FromBig(st.GasFeeCap)
 	mgval = mgval.Mul(mgval, gasFeeCap).Add(mgval, new(uint256.Int).SetUint64(params.Tx7560BaseGas))
+	mgval = mgval.Add(mgval, new(uint256.Int).SetUint64(l1Cost.Uint64()))
+
 	balanceCheck := new(uint256.Int).Set(mgval)
 
 	chargeFrom := *st.Sender
@@ -112,47 +126,30 @@ func BuyGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.St
 	}
 
 	if have, want := state.GetBalance(chargeFrom), balanceCheck; have.Cmp(want) < 0 {
-		return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
+		return &common.Address{}, fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
 	}
 
 	state.SubBalance(chargeFrom, mgval)
-	return nil
+	return &chargeFrom, nil
 }
 
-// TODO: move to a suitable interface, with BuyGasRip7560Transaction
-func RefundGasRip7560Transaction(st *types.Rip7560AccountAbstractionTx, state vm.StateDB, usedGas uint64) error {
-	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas
-	mgval := new(uint256.Int).SetUint64(gasLimit)
-	gasFeeCap, _ := uint256.FromBig(st.GasFeeCap)
-	mgval = mgval.Mul(mgval, gasFeeCap).Add(mgval, new(uint256.Int).SetUint64(params.Tx7560BaseGas))
-	usedval := new(uint256.Int).SetUint64(usedGas)
-
-	chargeFrom := *st.Sender
-
-	if len(st.PaymasterData) >= 20 {
-		chargeFrom = [20]byte(st.PaymasterData[:20])
-	}
-
-	state.AddBalance(chargeFrom, mgval.Sub(mgval, usedval))
-	return nil
-}
-
-func ApplyRip7560FrameMessage(evm *vm.EVM, msg *Message, gp *GasPool) (*ExecutionResult, error) {
-	return NewRip7560StateTransition(evm, msg, gp).TransitionDb()
+func ApplyRip7560FrameMessage(evm *vm.EVM, msg *Message, gp *GasPool, from *common.Address) (*ExecutionResult, error) {
+	return NewRip7560StateTransition(evm, msg, gp, from).TransitionDb()
 }
 
 // NewRip7560StateTransition initialises and returns a new state transition object.
-func NewRip7560StateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *StateTransition {
+func NewRip7560StateTransition(evm *vm.EVM, msg *Message, gp *GasPool, from *common.Address) *StateTransition {
 	return &StateTransition{
 		gp:           gp,
 		evm:          evm,
 		msg:          msg,
 		state:        evm.StateDB,
+		rip7560From:  from,
 		rip7560Frame: true,
 	}
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config) (*ValidationPhaseResult, error) {
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, from *common.Address) (*ValidationPhaseResult, error) {
 	stubMsg := prepareStubMessage(tx, chainConfig)
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := NewEVMTxContext(stubMsg)
@@ -162,11 +159,10 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	deployerMsg := prepareDeployerMessage(tx, chainConfig)
 	var deploymentUsedGas uint64
 	if deployerMsg != nil {
-		resultDeployer, err := ApplyRip7560FrameMessage(evm, deployerMsg, gp)
+		resultDeployer, err := ApplyRip7560FrameMessage(evm, deployerMsg, gp, from)
 		if err != nil {
 			return nil, err
 		}
-		statedb.IntermediateRoot(true)
 		if resultDeployer.Failed() {
 			// TODO: bubble up the inner error message to the user, if possible
 			return nil, errors.New("account deployment  failed - invalid transaction")
@@ -178,11 +174,10 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
 	signingHash := signer.Hash(tx)
 	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, deploymentUsedGas)
-	resultAccountValidation, err := ApplyRip7560FrameMessage(evm, accountValidationMsg, gp)
+	resultAccountValidation, err := ApplyRip7560FrameMessage(evm, accountValidationMsg, gp, from)
 	if err != nil {
 		return nil, err
 	}
-	statedb.IntermediateRoot(true)
 	if resultAccountValidation.Err != nil {
 		return nil, resultAccountValidation.Err
 	}
@@ -195,7 +190,10 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		return nil, err
 	}
 
-	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header)
+	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, from)
+	if err != nil {
+		return nil, err
+	}
 	vpr := &ValidationPhaseResult{
 		Tx:                  tx,
 		TxHash:              tx.Hash(),
@@ -212,7 +210,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	return vpr, nil
 }
 
-func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header) ([]byte, uint64, uint64, uint64, error) {
+func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header, from *common.Address) ([]byte, uint64, uint64, uint64, error) {
 	/*** Paymaster Validation Frame ***/
 	var pmValidationUsedGas uint64
 	var paymasterContext []byte
@@ -223,13 +221,12 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 		return nil, 0, 0, 0, err
 	}
 	if paymasterMsg != nil {
-		resultPm, err := ApplyRip7560FrameMessage(evm, paymasterMsg, gp)
+		resultPm, err := ApplyRip7560FrameMessage(evm, paymasterMsg, gp, from)
 		if err != nil {
 			return nil, 0, 0, 0, err
 		}
-		statedb.IntermediateRoot(true)
 		if resultPm.Failed() {
-			return nil, 0, 0, 0, errors.New("paymaster validation failed - invalid transaction")
+			return nil, 0, 0, 0, errors.New("paymaster validation failed - invalid transaction : " + resultPm.Unwrap().Error())
 		}
 		pmValidationUsedGas = resultPm.UsedGas
 		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData)
@@ -244,22 +241,25 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 	return paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, nil
 }
 
-func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *ExecutionResult, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header) (*ExecutionResult, error) {
+func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *ExecutionResult, evm *vm.EVM, gp *GasPool, from *common.Address) (*ExecutionResult, error) {
 	var paymasterPostOpResult *ExecutionResult
 	paymasterPostOpMsg, err := preparePostOpMessage(vpr, evm.ChainConfig(), executionResult)
 	if err != nil {
 		return nil, err
 	}
-	paymasterPostOpResult, err = ApplyRip7560FrameMessage(evm, paymasterPostOpMsg, gp)
+	paymasterPostOpResult, err = ApplyRip7560FrameMessage(evm, paymasterPostOpMsg, gp, from)
 	if err != nil {
 		return nil, err
 	}
-	// TODO: revert the execution phase changes
 	return paymasterPostOpResult, nil
 }
 
-func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config) (*types.Receipt, error) {
-	// TODO: snapshot EVM - we will revert back here if postOp fails
+func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, from *common.Address) (*types.Receipt, error) {
+	// revert back here if postOp fails
+	var (
+		snap    = statedb.Snapshot()
+		prevGas = gp.Gas()
+	)
 
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
 	message, err := TransactionToMessage(vpr.Tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
@@ -268,17 +268,25 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	evm := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
 
 	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
-	executionResult, err := ApplyRip7560FrameMessage(evm, accountExecutionMsg, gp)
+	executionResult, err := ApplyRip7560FrameMessage(evm, accountExecutionMsg, gp, from)
+	// TODO : handle err case
 	if err != nil {
 		return nil, err
 	}
 
-	root := statedb.IntermediateRoot(true).Bytes()
 	var paymasterPostOpResult *ExecutionResult
 	if len(vpr.PaymasterContext) != 0 {
-		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp, statedb, header)
-		root = statedb.IntermediateRoot(true).Bytes()
+		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp, from)
+		// revert the execution phase changes
+		if paymasterPostOpResult.Failed() {
+			statedb.RevertToSnapshot(snap)
+			gp.SetGas(prevGas)
+		}
 	}
+
+	root := statedb.IntermediateRoot(true).Bytes()
+
+	// TODO : handle err case
 	if err != nil {
 		return nil, err
 	}
