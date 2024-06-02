@@ -154,30 +154,30 @@ func NewRip7560StateTransition(evm *vm.EVM, msg *Message, gp *GasPool) *StateTra
 }
 
 func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config) (*ValidationPhaseResult, error) {
-	stubMsg := prepareStubMessage(tx, chainConfig)
+	/*** Nonce Validation Frame ***/
+	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
-	txContext := NewEVMTxContext(stubMsg)
+	txContext := NewEVMTxContext(nonceValidationMsg)
 	txContext.Origin = *tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
-	/*** Nonce Validation Frame ***/
-	nonceValidationMsg, err := prepareNonceValidationMessage(tx, chainConfig)
+
 	var nonceValidationUsedGas uint64
-	if nonceValidationMsg != nil {
-		resultNonceValidation, err := ApplyRip7560FrameMessage(evm, nonceValidationMsg, gp)
-		if err != nil && errors.Is(err, vm.ErrExecutionReverted) {
+	// TODO(sm-stack): better handling instead of checking the length?
+	if len(nonceValidationMsg.Data) == 52 {
+		resultNonceManager, err := ApplyRip7560FrameMessage(evm, nonceValidationMsg, gp)
+		if err != nil {
 			return nil, err
 		}
 		statedb.IntermediateRoot(true)
-		if resultNonceValidation.Failed() {
-			return nil, errors.New("nonce validation failed - invalid transaction")
+		if resultNonceManager.Err != nil {
+			return nil, resultNonceManager.Err
 		}
-		nonceValidationUsedGas = resultNonceValidation.UsedGas
+		nonceValidationUsedGas = resultNonceManager.UsedGas
 	} else {
 		currentNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
-		if currentNonce != tx.Rip7560TransactionData().AaNonce.Uint64() {
+		if currentNonce != tx.Rip7560TransactionData().BigNonce.Uint64() {
 			return nil, errors.New("nonce validation failed - invalid transaction")
 		}
-		nonceValidationUsedGas = 0
 		statedb.SetNonce(*tx.Rip7560TransactionData().Sender, currentNonce+1)
 	}
 
@@ -329,37 +329,18 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	}
 	return receipt, err
 }
-func prepareStubMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
-	tx := baseTx.Rip7560TransactionData()
-	return &Message{
-		From:              chainConfig.EntryPointAddress,
-		Value:             big.NewInt(0),
-		GasLimit:          100000,
-		GasPrice:          tx.GasFeeCap,
-		GasFeeCap:         tx.GasFeeCap,
-		GasTipCap:         tx.GasTipCap,
-		AccessList:        make(types.AccessList, 0),
-		SkipAccountChecks: true,
-		IsRip7560Frame:    true,
-	}
-}
 
-func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) (*Message, error) {
+func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
 	tx := baseTx.Rip7560TransactionData()
-	if tx.AaNonce.Cmp(new(big.Int).Lsh(big.NewInt(1), 64)) <= 0 {
-		return nil, nil
-	}
-	addressType, _ := abi.NewType("address", "", nil)
-	uint256Type, _ := abi.NewType("uint256", "", nil)
-	arguments := abi.Arguments{
-		{Type: addressType, Name: "sender"},
-		{Type: uint256Type, Name: "nonce"},
-	}
+	fromBig, _ := uint256.FromBig(tx.BigNonce)
 
-	validateIncrementData, err := arguments.Pack(tx.Sender, tx.AaNonce)
-	validateIncrementData = validateIncrementData[12:] // remove the zero-padded prefix
-	if err != nil {
-		return nil, err
+	// TODO(sm-stack): add error handling for bigNonce value over 32 bytes
+	nonceValidationData := make([]byte, 0)
+	if fromBig.Cmp(uint256.NewInt((1<<64)-1)) > 0 {
+		key := make([]byte, 32)
+		fromBig.WriteToSlice(key)
+		nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
+		nonceValidationData = append(nonceValidationData[:], key...)
 	}
 	return &Message{
 		From:              chainConfig.EntryPointAddress,
@@ -369,11 +350,11 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
-		Data:              validateIncrementData,
+		Data:              nonceValidationData,
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-	}, nil
+	}
 }
 
 func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64) *Message {
@@ -536,8 +517,8 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 	if magicExpected != MAGIC_VALUE_SENDER {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
-	validUntil := binary.BigEndian.Uint64(data[4:12])
-	validAfter := binary.BigEndian.Uint64(data[12:20])
+	validAfter := binary.BigEndian.Uint64(data[4:12])
+	validUntil := binary.BigEndian.Uint64(data[12:20])
 	return validAfter, validUntil, nil
 }
 
