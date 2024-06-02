@@ -428,9 +428,9 @@ func (tx *Transaction) PostOpGas() uint64 {
 	return 0
 }
 
-func (tx *Transaction) AaNonce() *big.Int {
+func (tx *Transaction) BigNonce() *big.Int {
 	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
-		return dep.AaNonce
+		return dep.BigNonce
 	}
 	return nil
 }

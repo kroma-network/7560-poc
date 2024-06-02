@@ -1469,7 +1469,7 @@ type RPCTransaction struct {
 	ValidationGas hexutil.Uint64  `json:"validationGas,omitempty"`
 	PaymasterGas  hexutil.Uint64  `json:"paymasterGas,omitempty"`
 	PostOpGas     hexutil.Uint64  `json:"postOpGas,omitempty"`
-	AaNonce       *hexutil.Big    `json:"aaNonce,omitempty"`
+	BigNonce      *hexutil.Big    `json:"bigNonce,omitempty"`
 }
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
@@ -1582,7 +1582,7 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.ValidationGas = (hexutil.Uint64)(tx.ValidationGas())
 		result.PaymasterGas = (hexutil.Uint64)(tx.PaymasterGas())
 		result.PostOpGas = (hexutil.Uint64)(tx.PostOpGas())
-		result.AaNonce = (*hexutil.Big)(tx.AaNonce())
+		result.BigNonce = (*hexutil.Big)(tx.BigNonce())
 	}
 	return result
 }
