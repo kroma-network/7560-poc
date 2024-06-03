@@ -67,14 +67,14 @@ func (result *ExecutionResult) Revert() []byte {
 }
 
 // IntrinsicGas computes the 'intrinsic gas' for a message with the given data.
-func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isRip7560Frame, isHomestead, isEIP2028, isEIP3860 bool) (uint64, error) {
+func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028, isEIP3860 bool, isRIP7560InnerFrame ...bool) (uint64, error) {
+	if isRIP7560InnerFrame != nil && len(isRIP7560InnerFrame) > 0 && isRIP7560InnerFrame[0] {
+		return 0, nil
+	}
 	// Set the starting gas for the raw transaction
 	var gas uint64
 	if isContractCreation && isHomestead {
 		gas = params.TxGasContractCreation
-	} else if isRip7560Frame {
-		// Tx7560BaseGas must paid once. And that's already paid
-		gas = 0
 	} else {
 		gas = params.TxGas
 	}
@@ -149,6 +149,7 @@ type Message struct {
 	// This field will be set to true for operations like RPC eth_call.
 	SkipAccountChecks bool
 	IsRip7560Frame    bool
+	Payment           *common.Address
 
 	IsSystemTx     bool                 // IsSystemTx indicates the message, if also a deposit, does not emit gas usage.
 	IsDepositTx    bool                 // IsDepositTx indicates the message is force-included and can persist a mint.
@@ -177,7 +178,7 @@ func TransactionToMessage(tx *types.Transaction, s types.Signer, baseFee *big.In
 		BlobHashes:        tx.BlobHashes(),
 		BlobGasFeeCap:     tx.BlobGasFeeCap(),
 	}
-	// If baseFee provided, set gasPrice to effectiveGasPrice.
+	// If baseFee provided, set gasPrice to effectiveGasPrice. gg
 	if baseFee != nil {
 		msg.GasPrice = cmath.BigMin(msg.GasPrice.Add(msg.GasTipCap, baseFee), msg.GasFeeCap)
 	}
@@ -226,7 +227,6 @@ type StateTransition struct {
 	initialGas   uint64
 	state        vm.StateDB
 	evm          *vm.EVM
-	rip7560Frame bool
 }
 
 // NewStateTransition initialises and returns a new state transition object.
@@ -282,12 +282,8 @@ func (st *StateTransition) buyGas() error {
 	if overflow {
 		return fmt.Errorf("%w: address %v required balance exceeds 256 bits", ErrInsufficientFunds, st.msg.From.Hex())
 	}
-
-	// RIP-7560 : balance check is performed beforehand
-	if !st.msg.IsRip7560Frame {
-		if have, want := st.state.GetBalance(st.msg.From), balanceCheckU256; have.Cmp(want) < 0 {
-			return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
-		}
+	if have, want := st.state.GetBalance(st.msg.From), balanceCheckU256; have.Cmp(want) < 0 {
+		return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, st.msg.From.Hex(), have, want)
 	}
 	if err := st.gp.SubGas(st.msg.GasLimit); err != nil {
 		return err
@@ -296,10 +292,7 @@ func (st *StateTransition) buyGas() error {
 
 	st.initialGas = st.msg.GasLimit
 	mgvalU256, _ := uint256.FromBig(mgval)
-	// RIP-7560 : gas is already purchased in advance
-	if !st.msg.IsRip7560Frame {
-		st.state.SubBalance(st.msg.From, mgvalU256)
-	}
+	st.state.SubBalance(st.msg.From, mgvalU256)
 	return nil
 }
 
@@ -318,6 +311,13 @@ func (st *StateTransition) preCheck() error {
 			return nil
 		}
 		return st.gp.SubGas(st.msg.GasLimit) // gas used by deposits may not be used by other txs
+	}
+	// no need to "buy gus" for individual frames
+	// there is a single shared gas pre-charge
+	if st.msg.IsRip7560Frame {
+		st.gasRemaining += st.msg.GasLimit
+		st.initialGas = st.msg.GasLimit
+		return nil
 	}
 	// Only check transactions that are not fake
 	msg := st.msg
@@ -481,7 +481,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 	)
 
 	// Check clauses 4-5, subtract intrinsic gas if everything is correct
-	gas, err := IntrinsicGas(msg.Data, msg.AccessList, contractCreation, msg.IsRip7560Frame, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai)
+	gas, err := IntrinsicGas(msg.Data, msg.AccessList, contractCreation, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, msg.IsRip7560Frame)
 	if err != nil {
 		return nil, err
 	}
@@ -576,7 +576,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 
 	// Check that we are post bedrock to enable op-geth to be able to create pseudo pre-bedrock blocks (these are pre-bedrock, but don't follow l2 geth rules)
 	// Note optimismConfig will not be nil if rules.IsOptimismBedrock is true
-	if optimismConfig := st.evm.ChainConfig().Optimism; optimismConfig != nil && rules.IsOptimismBedrock && !st.msg.IsDepositTx {
+	if optimismConfig := st.evm.ChainConfig().Optimism; optimismConfig != nil && rules.IsOptimismBedrock && !st.msg.IsDepositTx && !msg.IsRip7560Frame {
 		gasCost := new(big.Int).Mul(new(big.Int).SetUint64(st.gasUsed()), st.evm.Context.BaseFee)
 		amtU256, overflow := uint256.FromBig(gasCost)
 		if overflow {
