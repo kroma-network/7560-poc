@@ -177,9 +177,12 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		if err != nil {
 			return nil, err
 		}
-		if resultDeployer.Failed() {
+		deployedAddr := common.BytesToAddress(resultDeployer.ReturnData)
+		if resultDeployer.Failed() || statedb.GetCode(deployedAddr) == nil {
 			// TODO: bubble up the inner error message to the user, if possible
-			return nil, errors.New("account deployment  failed - invalid transaction")
+			return nil, errors.New("account deployment failed - invalid transaction")
+		} else if deployedAddr != *tx.Rip7560TransactionData().Sender {
+			return nil, errors.New("deployed address mismatch - invalid transaction")
 		}
 		deploymentUsedGas = resultDeployer.UsedGas
 	}
