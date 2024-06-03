@@ -17,6 +17,8 @@ import (
 	"strings"
 )
 
+const MaxContextSize = 65536
+
 type ValidationPhaseResult struct {
 	TxIndex                int
 	Tx                     *types.Transaction
@@ -430,7 +432,7 @@ func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params
 	}
 	var paymasterAddress common.Address = [20]byte(tx.PaymasterData[0:20])
 	jsondata := `[
-	{"type":"function","name":"validatePaymasterTransaction","inputs": [{"name": "version","type": "uint256"},{"name": "txHash","type": "bytes32"},{"name": "transaction","type": "bytes"}]}
+		{"type":"function","name":"validatePaymasterTransaction","inputs": [{"name": "version","type": "uint256"},{"name": "txHash","type": "bytes32"},{"name": "transaction","type": "bytes"}]}
 	]`
 
 	validateTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
@@ -479,8 +481,8 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 
 	tx := vpr.Tx.Rip7560TransactionData()
 	jsondata := `[
-			{"type":"function","name":"postPaymasterTransaction","inputs": [{"name": "success","type": "bool"},{"name": "actualGasCost","type": "uint256"},{"name": "context","type": "bytes"}]}
-		]`
+		{"type":"function","name":"postPaymasterTransaction","inputs": [{"name": "success","type": "bool"},{"name": "actualGasCost","type": "uint256"},{"name": "context","type": "bytes"}]}
+	]`
 	postPaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
 	if err != nil {
 		return nil, err
@@ -514,15 +516,15 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 	if magicExpected != MAGIC_VALUE_SENDER {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
-	validAfter := binary.BigEndian.Uint64(data[4:12])
-	validUntil := binary.BigEndian.Uint64(data[12:20])
+	validUntil := binary.BigEndian.Uint64(data[4:12])
+	validAfter := binary.BigEndian.Uint64(data[12:20])
 	return validAfter, validUntil, nil
 }
 
 func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 	MAGIC_VALUE_PAYMASTER := uint32(0xe0e6183a)
 	jsondata := `[
-		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
+		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "context","type": "bytes"},{"name": "validationData","type": "bytes32"}]}
 	]`
 	validatePaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
 	if err != nil {
@@ -531,20 +533,23 @@ func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 	}
 
 	var validatePaymasterResult struct {
-		ValidationData [32]byte
 		Context        []byte
+		ValidationData [32]byte
 	}
 
 	err = validatePaymasterTransactionAbi.UnpackIntoInterface(&validatePaymasterResult, "validatePaymasterTransaction", data)
 	if err != nil {
 		return nil, 0, 0, err
 	}
+	if len(validatePaymasterResult.Context) > MaxContextSize {
+		return nil, 0, 0, errors.New("paymaster returned context size too large")
+	}
 	magicExpected := binary.BigEndian.Uint32(validatePaymasterResult.ValidationData[:4])
 	if magicExpected != MAGIC_VALUE_PAYMASTER {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
-	validAfter := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
-	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[12:20])
+	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
+	validAfter := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[12:20])
 	context := validatePaymasterResult.Context
 
 	return context, validAfter, validUntil, nil
