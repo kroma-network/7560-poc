@@ -149,7 +149,6 @@ type Message struct {
 	// This field will be set to true for operations like RPC eth_call.
 	SkipAccountChecks bool
 	IsRip7560Frame    bool
-	Payment           *common.Address
 
 	IsSystemTx     bool                 // IsSystemTx indicates the message, if also a deposit, does not emit gas usage.
 	IsDepositTx    bool                 // IsDepositTx indicates the message is force-included and can persist a mint.
