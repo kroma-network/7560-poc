@@ -62,7 +62,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		}
 
 		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
-		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, header, tx, statedb)
+		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
 		if err != nil {
 			// TODO : do we have to drop bundle?
 			continue
@@ -73,7 +73,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		// we will revert to the previous state and invalidate the transaction.
 		var snapshot = statedb.Snapshot()
 		var vpr *ValidationPhaseResult
-		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, payment)
+		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
 			// If an error occurs in the validation phase, invalidate the transaction
 			statedb.RevertToSnapshot(snapshot)
@@ -105,7 +105,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // BuyGasRip7560Transaction
 // todo: move to a suitable interface, whatever that is
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
-func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, header *types.Header, tx *types.Transaction, state vm.StateDB) (*common.Address, *uint256.Int, error) {
+func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB) (*common.Address, *uint256.Int, error) {
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas + params.Tx7560BaseGas
 	// Store prepaid values in gas units
@@ -122,9 +122,6 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, header *types.Hea
 	}
 	mgval = mgval.Add(mgval, new(uint256.Int).SetUint64(l1Cost.Uint64()))
 	balanceCheck := new(uint256.Int).Set(mgval)
-	var l1CostGas = new(uint256.Int)
-	l1CostGas.SetFromBig(l1Cost.Div(l1Cost, st.GasFeeCap))
-	mggas = mggas.Add(mggas, l1CostGas)
 
 	chargeFrom := *st.Sender
 	if len(st.PaymasterData) >= 20 {
@@ -136,12 +133,16 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, header *types.Hea
 	}
 
 	state.SubBalance(chargeFrom, mgval)
+	err := gp.SubGas(mggas.Uint64())
+	if err != nil {
+		return &common.Address{}, new(uint256.Int), err
+	}
 	return &chargeFrom, mggas, nil
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, payment *common.Address) (*ValidationPhaseResult, error) {
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config) (*ValidationPhaseResult, error) {
 	/*** Nonce Validation Frame ***/
-	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig, payment)
+	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := NewEVMTxContext(nonceValidationMsg)
 	txContext.Origin = *tx.Rip7560TransactionData().Sender
@@ -167,7 +168,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	}
 
 	/*** Deployer Frame ***/
-	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas, payment)
+	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas)
 	var deploymentUsedGas uint64
 	if deployerMsg != nil {
 		resultDeployer, err := ApplyMessage(evm, deployerMsg, gp)
@@ -184,7 +185,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	/*** Account Validation Frame ***/
 	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
 	signingHash := signer.Hash(tx)
-	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas, payment)
+	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas)
 	resultAccountValidation, err := ApplyMessage(evm, accountValidationMsg, gp)
 	if err != nil {
 		return nil, err
@@ -201,7 +202,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		return nil, err
 	}
 
-	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, payment)
+	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header)
 	vpr := &ValidationPhaseResult{
 		Tx:                     tx,
 		TxHash:                 tx.Hash(),
@@ -219,13 +220,13 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	return vpr, nil
 }
 
-func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header, payment *common.Address) ([]byte, uint64, uint64, uint64, error) {
+func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header) ([]byte, uint64, uint64, uint64, error) {
 	/*** Paymaster Validation Frame ***/
 	var pmValidationUsedGas uint64
 	var paymasterContext []byte
 	var pmValidAfter uint64
 	var pmValidUntil uint64
-	paymasterMsg, err := preparePaymasterValidationMessage(tx, chainConfig, signingHash, payment)
+	paymasterMsg, err := preparePaymasterValidationMessage(tx, chainConfig, signingHash)
 	if err != nil {
 		return nil, 0, 0, 0, err
 	}
@@ -251,9 +252,9 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 	return paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, nil
 }
 
-func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *ExecutionResult, evm *vm.EVM, gp *GasPool, payment *common.Address) (*ExecutionResult, error) {
+func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *ExecutionResult, evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
 	var paymasterPostOpResult *ExecutionResult
-	paymasterPostOpMsg, err := preparePostOpMessage(vpr, evm.ChainConfig(), executionResult, payment)
+	paymasterPostOpMsg, err := preparePostOpMessage(vpr, evm.ChainConfig(), executionResult)
 	if err != nil {
 		return nil, err
 	}
@@ -273,7 +274,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	txContext := NewEVMTxContext(message)
 	txContext.Origin = *vpr.Tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
-	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig(), payment)
+	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
 	executionResult, err := ApplyMessage(evm, accountExecutionMsg, gp)
 	if err != nil {
 		return nil, err
@@ -281,7 +282,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 
 	var paymasterPostOpResult *ExecutionResult
 	if len(vpr.PaymasterContext) != 0 {
-		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp, payment)
+		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp)
 		if err != nil {
 			return nil, err
 		}
@@ -316,6 +317,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	gasPenalty := (prepaidGas.Uint64() - cumulativeGasUsed) * UNUSED_GAS_PENALTY_PERCENT / 100
 	cumulativeGasUsed += gasPenalty
 	statedb.AddBalance(*payment, uint256.NewInt((prepaidGas.Uint64()-cumulativeGasUsed)*evm.Context.BaseFee.Uint64()))
+	gp.AddGas(prepaidGas.Uint64() - cumulativeGasUsed)
 
 	// payments for rollup gas expenses to recipients
 	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(cumulativeGasUsed), evm.Context.BaseFee)
@@ -346,7 +348,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	return receipt, err
 }
 
-func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig, payment *common.Address) *Message {
+func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
 	tx := baseTx.Rip7560TransactionData()
 	fromBig, _ := uint256.FromBig(tx.BigNonce)
 
@@ -370,11 +372,10 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}
 }
 
-func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64, payment *common.Address) *Message {
+func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64) *Message {
 	tx := baseTx.Rip7560TransactionData()
 	if len(tx.DeployerData) < 20 {
 		return nil
@@ -392,11 +393,10 @@ func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfi
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}
 }
 
-func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, nonceValidationUsedGas, deploymentUsedGas uint64, payment *common.Address) (*Message, error) {
+func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, nonceValidationUsedGas, deploymentUsedGas uint64) (*Message, error) {
 	tx := baseTx.Rip7560TransactionData()
 	jsondata := `[
 	{"type":"function","name":"validateTransaction","inputs": [{"name": "version","type": "uint256"},{"name": "txHash","type": "bytes32"},{"name": "transaction","type": "bytes"}]}
@@ -420,11 +420,10 @@ func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *par
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}, nil
 }
 
-func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params.ChainConfig, signingHash common.Hash, payment *common.Address) (*Message, error) {
+func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params.ChainConfig, signingHash common.Hash) (*Message, error) {
 	tx := baseTx.Rip7560TransactionData()
 	if len(tx.PaymasterData) < 20 {
 		return nil, nil
@@ -453,11 +452,10 @@ func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}, nil
 }
 
-func prepareAccountExecutionMessage(baseTx *types.Transaction, config *params.ChainConfig, payment *common.Address) *Message {
+func prepareAccountExecutionMessage(baseTx *types.Transaction, config *params.ChainConfig) *Message {
 	tx := baseTx.Rip7560TransactionData()
 	return &Message{
 		From:              config.EntryPointAddress,
@@ -471,11 +469,10 @@ func prepareAccountExecutionMessage(baseTx *types.Transaction, config *params.Ch
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}
 }
 
-func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainConfig, executionResult *ExecutionResult, payment *common.Address) (*Message, error) {
+func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainConfig, executionResult *ExecutionResult) (*Message, error) {
 	if len(vpr.PaymasterContext) == 0 {
 		return nil, nil
 	}
@@ -505,7 +502,6 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 		AccessList:        tx.AccessList,
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
-		Payment:           payment,
 	}, nil
 }
 
