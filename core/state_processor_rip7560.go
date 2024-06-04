@@ -151,23 +151,14 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
 	var nonceValidationUsedGas uint64
-	// TODO(sm-stack): better handling instead of checking the length?
-	if len(nonceValidationMsg.Data) == 52 {
-		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
-		if err != nil {
-			return nil, err
-		}
-		if resultNonceManager.Err != nil {
-			return nil, resultNonceManager.Err
-		}
-		nonceValidationUsedGas = resultNonceManager.UsedGas
-	} else {
-		currentNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
-		if currentNonce != tx.Rip7560TransactionData().BigNonce.Uint64() {
-			return nil, errors.New("nonce validation failed - invalid transaction")
-		}
-		statedb.SetNonce(*tx.Rip7560TransactionData().Sender, currentNonce+1)
+	resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
+	if err != nil {
+		return nil, err
 	}
+	if resultNonceManager.Err != nil {
+		return nil, resultNonceManager.Err
+	}
+	nonceValidationUsedGas = resultNonceManager.UsedGas
 
 	/*** Deployer Frame ***/
 	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas)
@@ -355,16 +346,16 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 
 func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
 	tx := baseTx.Rip7560TransactionData()
-	fromBig, _ := uint256.FromBig(tx.BigNonce)
 
 	// TODO(sm-stack): add error handling for bigNonce value over 32 bytes
+	key := make([]byte, 32)
+	fromBig, _ := uint256.FromBig(tx.BigNonce)
+	fromBig.WriteToSlice(key)
+
 	nonceValidationData := make([]byte, 0)
-	if fromBig.Cmp(uint256.NewInt((1<<64)-1)) > 0 {
-		key := make([]byte, 32)
-		fromBig.WriteToSlice(key)
-		nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
-		nonceValidationData = append(nonceValidationData[:], key...)
-	}
+	nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
+	nonceValidationData = append(nonceValidationData[:], key...)
+
 	return &Message{
 		From:              chainConfig.EntryPointAddress,
 		To:                &chainConfig.NonceManagerAddress,
