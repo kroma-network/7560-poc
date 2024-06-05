@@ -114,7 +114,7 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	mggas := new(uint256.Int).SetUint64(gasLimit)
 	// adjust effectiveGasPrice
 	effectiveGasPrice := cmath.BigMin(new(big.Int).Add(st.GasTipCap, header.BaseFee), st.GasFeeCap)
-	mgval := mggas.Mul(mggas, new(uint256.Int).SetUint64(effectiveGasPrice.Uint64()))
+	mgval := new(uint256.Int).Mul(mggas, new(uint256.Int).SetUint64(effectiveGasPrice.Uint64()))
 
 	// calculate rollup cost
 	var l1Cost *big.Int
