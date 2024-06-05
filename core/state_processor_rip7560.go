@@ -32,6 +32,8 @@ type ValidationPhaseResult struct {
 	SenderValidUntil       uint64
 	PmValidAfter           uint64
 	PmValidUntil           uint64
+	Payment                *common.Address
+	PrepaidGas             *uint256.Int
 }
 
 // HandleRip7560Transactions apply state changes of all sequential RIP-7560 transactions and return
@@ -69,7 +71,6 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			// TODO : do we have to drop bundle?
 			continue
 		}
-
 		// No issues should occur during the validation phase.
 		// However, in the unlikely event that something goes wrong,
 		// we will revert to the previous state and invalidate the transaction.
@@ -81,19 +82,20 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			statedb.RevertToSnapshot(snapshot)
 			continue
 		}
-		// now update trie before execution phase
 		statedb.IntermediateRoot(true)
+
+		vpr.Payment = payment
+		vpr.PrepaidGas = prepaidGas
 		validationPhaseResults = append(validationPhaseResults, vpr)
 		validatedTransactions = append(validatedTransactions, tx)
+	}
 
-		// This is the line separating the Validation and Execution phases
-		// It should be separated to implement the mempool-friendly AA RIP (number not assigned yet)
-		// for i, vpr := range validationPhaseResults
-
+	// This is the line separating the Validation and Execution phases
+	// It should be separated to implement the mempool-friendly AA RIP (number not assigned yet)
+	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
-		// statedb.SetTxContext(vpr.Tx.Hash(), i)
-
-		receipt, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, payment, prepaidGas)
+		statedb.SetTxContext(vpr.Tx.Hash(), i)
+		receipt, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, vpr.Payment, vpr.PrepaidGas)
 		if err != nil {
 			return nil, nil, nil, err
 		}
