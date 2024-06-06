@@ -1460,16 +1460,17 @@ type RPCTransaction struct {
 	DepositReceiptVersion *hexutil.Uint64 `json:"depositReceiptVersion,omitempty"`
 
 	// RIP-7560-tx only
-	Subtype       hexutil.Uint64  `json:"subType,omitempty"`
-	Sender        *common.Address `json:"sender,omitempty"`
-	Signature     hexutil.Bytes   `json:"signature,omitempty"`
-	PaymasterData hexutil.Bytes   `json:"paymasterData,omitempty"`
-	DeployerData  hexutil.Bytes   `json:"deployerData,omitempty"`
-	BuilderFee    *hexutil.Big    `json:"builderFee,omitempty"`
-	ValidationGas hexutil.Uint64  `json:"validationGas,omitempty"`
-	PaymasterGas  hexutil.Uint64  `json:"paymasterGas,omitempty"`
-	PostOpGas     hexutil.Uint64  `json:"postOpGas,omitempty"`
-	BigNonce      *hexutil.Big    `json:"bigNonce,omitempty"`
+	Subtype          hexutil.Uint64  `json:"subType,omitempty"`
+	Sender           *common.Address `json:"sender,omitempty"`
+	Signature        hexutil.Bytes   `json:"signature,omitempty"`
+	PaymasterData    hexutil.Bytes   `json:"paymasterData,omitempty"`
+	DeployerData     hexutil.Bytes   `json:"deployerData,omitempty"`
+	BuilderFee       *hexutil.Big    `json:"builderFee,omitempty"`
+	ValidationGas    hexutil.Uint64  `json:"validationGas,omitempty"`
+	PaymasterGas     hexutil.Uint64  `json:"paymasterGas,omitempty"`
+	PostOpGas        hexutil.Uint64  `json:"postOpGas,omitempty"`
+	BigNonce         *hexutil.Big    `json:"bigNonce,omitempty"`
+	TransactionCount hexutil.Uint64  `json:"transactionCount,omitempty"`
 }
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
@@ -1583,6 +1584,10 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.PaymasterGas = (hexutil.Uint64)(tx.PaymasterGas())
 		result.PostOpGas = (hexutil.Uint64)(tx.PostOpGas())
 		result.BigNonce = (*hexutil.Big)(tx.BigNonce())
+	case types.Rip7560BundleHeaderType:
+		log.Info("rip7560(bundleHeader) new RpcTransaction")
+		result.ChainID = (*hexutil.Big)(tx.ChainId())
+		result.TransactionCount = (hexutil.Uint64)(tx.TransactionCount())
 	}
 	return result
 }

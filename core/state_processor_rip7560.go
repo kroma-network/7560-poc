@@ -58,8 +58,16 @@ func HandleRip7560Transactions(transactions []*types.Transaction, index int, sta
 func handleRip7560Transactions(transactions []*types.Transaction, index int, statedb *state.StateDB, coinbase *common.Address, header *types.Header, gp *GasPool, chainConfig *params.ChainConfig, bc ChainContext, cfg vm.Config) ([]*types.Transaction, types.Receipts, []*types.Log, error) {
 	validationPhaseResults := make([]*ValidationPhaseResult, 0)
 	validatedTransactions := make([]*types.Transaction, 0)
+	var bundleHeaderTransaction *types.Transaction
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
+
+	// check bundle header transaction exists
+	if transactions[0].Type() == types.Rip7560BundleHeaderType {
+		bundleHeaderTransaction = transactions[0]
+		transactions = transactions[1:]
+	}
+
 	for _, tx := range transactions[index:] {
 		if tx.Type() != types.Rip7560Type {
 			break
@@ -103,6 +111,18 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
 	}
+
+	if bundleHeaderTransaction != nil {
+		validatedTransactions = append([]*types.Transaction{bundleHeaderTransaction}, validatedTransactions...)
+		receipt := &types.Receipt{
+			Type:              types.Rip7560BundleHeaderType,
+			Status:            types.ReceiptStatusSuccessful,
+			CumulativeGasUsed: 0,
+		}
+		receipts = append([]*types.Receipt{receipt}, receipts...)
+		allLogs = append(receipt.Logs, allLogs...)
+	}
+
 	return validatedTransactions, receipts, allLogs, nil
 }
 
