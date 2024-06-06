@@ -1111,6 +1111,12 @@ func (w *worker) commitRip7560TransactionsBundle(env *environment, txs *types.Ex
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
 
+	// adding RIP-7560 bundle header transaction here
+	bundleHeaderTx := types.NewTx(&types.Rip7560BundleHeaderTx{
+		ChainID:          w.chainConfig.ChainID,
+		TransactionCount: uint64(len(txs.Transactions)),
+	})
+	txs.Transactions = append([]*types.Transaction{bundleHeaderTx}, txs.Transactions...)
 	validatedTxs, receipts, _, err := core.HandleRip7560Transactions(txs.Transactions, 0, env.state, &env.coinbase, env.header, env.gasPool, w.chainConfig, w.chain, vm.Config{})
 
 	env.txs = append(env.txs, validatedTxs...)
@@ -1158,6 +1164,7 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
+	// TODO: What if there are multiple pendingRip7560Bundles?
 	pendingBundle, err := w.eth.TxPool().PendingRip7560Bundle()
 	if pendingBundle != nil {
 		if err = w.commitRip7560TransactionsBundle(env, pendingBundle, interrupt); err != nil {
@@ -1391,6 +1398,7 @@ func copyReceipts(receipts []*types.Receipt) []*types.Receipt {
 	return result
 }
 
+// TODO: need check here
 // totalFees computes total consumed miner fees in Wei. Block transactions and receipts have to have the same order.
 func totalFees(block *types.Block, receipts []*types.Receipt) *big.Int {
 	feesWei := new(big.Int)

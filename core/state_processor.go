@@ -82,6 +82,8 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
+		// TODO: passing data per bundle unit
+		//if tx.Type() == types.Rip7560BundleHeaderType {
 		if tx.Type() == types.Rip7560Type {
 			// HandleRip7560Transactions accepts a transaction array and in the future bundle handling will need this
 			tmpTxs := [1]*types.Transaction{tx}

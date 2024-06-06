@@ -60,6 +60,14 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	validatedTransactions := make([]*types.Transaction, 0)
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
+
+	// check & fill bundle header transaction
+	bundleHeaderTx := transactions[0]
+	transactions = transactions[1:]
+	if bundleHeaderTx.Type() != types.Rip7560BundleHeaderType {
+		return nil, nil, nil, fmt.Errorf("BundleHeaderTrasnaction not exists")
+	}
+
 	for _, tx := range transactions[index:] {
 		if tx.Type() != types.Rip7560Type {
 			break
@@ -102,6 +110,14 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 
 		receipts = append(receipts, receipt)
 		allLogs = append(allLogs, receipt.Logs...)
+	}
+
+	// TODO: Should I conditionally fill value here?
+	if bundleHeaderTx.Rip7560BundleHeaderTransactionData().BlockNumber.Cmp(big.NewInt(0)) == 0 {
+		bundleHeaderTx.Rip7560BundleHeaderTransactionData().BlockNumber.Set(header.Number)
+		bundleHeaderTx.Rip7560BundleHeaderTransactionData().TransactionCount = uint64(len(validatedTransactions))
+		bundleHeaderTx.Rip7560BundleHeaderTransactionData().TransactionIndex = uint(index)
+		validatedTransactions = append([]*types.Transaction{bundleHeaderTx}, validatedTransactions...)
 	}
 	return validatedTransactions, receipts, allLogs, nil
 }

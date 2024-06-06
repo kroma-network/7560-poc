@@ -51,6 +51,8 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	Rip7560Type      = 0x04
+	// FIXME: find way to identify this
+	Rip7560BundleHeaderType = 0x05
 )
 
 // Transaction is an Ethereum transaction.
@@ -610,6 +612,12 @@ func (tx *Transaction) Rip7560TransactionData() *Rip7560AccountAbstractionTx {
 	return ptr
 }
 
+func (tx *Transaction) Rip7560BundleHeaderTransactionData() *Rip7560BundleHeaderTx {
+	inner := tx.inner
+	ptr := inner.(*Rip7560BundleHeaderTx)
+	return ptr
+}
+
 // SetTime sets the decoding time of a transaction. This is used by tests to set
 // arbitrary times and by persistent transaction pools when loading old txs from
 // disk.
@@ -632,6 +640,9 @@ func (tx *Transaction) Hash() common.Hash {
 	var h common.Hash
 	if tx.Type() == LegacyTxType {
 		h = rlpHash(tx.inner)
+	} else if tx.Type() == Rip7560BundleHeaderType {
+		rlpHash := rlpHash(tx.Rip7560BundleHeaderTransactionData())
+		h = crypto.Keccak256Hash(append([]byte{Rip7560Type, ScaTransactionSubtype}, rlpHash[:]...))
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}

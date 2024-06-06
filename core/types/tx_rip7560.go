@@ -147,6 +147,67 @@ func (tx *Rip7560AccountAbstractionTx) decode(input []byte) error {
 	return rlp.DecodeBytes(input[1:], tx)
 }
 
+// Rip7560BundleHeaderTx represents an RIP-7560 bundle header transaction.
+type Rip7560BundleHeaderTx struct {
+	ChainID          *big.Int
+	BlockNumber      *big.Int
+	TransactionCount uint64
+	TransactionIndex uint
+}
+
+// accessors for innerTx.
+func (tx *Rip7560BundleHeaderTx) txType() byte           { return Rip7560BundleHeaderType }
+func (tx *Rip7560BundleHeaderTx) chainID() *big.Int      { return tx.ChainID }
+func (tx *Rip7560BundleHeaderTx) accessList() AccessList { return nil }
+func (tx *Rip7560BundleHeaderTx) data() []byte           { return nil }
+func (tx *Rip7560BundleHeaderTx) gas() uint64            { return 0 }
+func (tx *Rip7560BundleHeaderTx) gasFeeCap() *big.Int    { return new(big.Int) }
+func (tx *Rip7560BundleHeaderTx) gasTipCap() *big.Int    { return new(big.Int) }
+func (tx *Rip7560BundleHeaderTx) gasPrice() *big.Int     { return new(big.Int) }
+func (tx *Rip7560BundleHeaderTx) value() *big.Int        { return new(big.Int) }
+func (tx *Rip7560BundleHeaderTx) nonce() uint64          { return 0 }
+func (tx *Rip7560BundleHeaderTx) to() *common.Address    { return nil }
+
+func (tx *Rip7560BundleHeaderTx) isSystemTx() bool { return false }
+func (tx *Rip7560BundleHeaderTx) copy() TxData {
+	cpy := &Rip7560BundleHeaderTx{
+		ChainID:          new(big.Int),
+		BlockNumber:      new(big.Int),
+		TransactionCount: 0,
+		TransactionIndex: 0,
+	}
+	if tx.ChainID != nil {
+		cpy.ChainID.Set(tx.ChainID)
+	}
+	if tx.BlockNumber != nil {
+		cpy.BlockNumber.Set(tx.BlockNumber)
+	}
+	if tx.TransactionCount != 0 {
+		cpy.TransactionCount = tx.TransactionCount
+	}
+	if tx.TransactionIndex != 0 {
+		cpy.TransactionIndex = tx.TransactionIndex
+	}
+	return cpy
+}
+
+func (tx *Rip7560BundleHeaderTx) rawSignatureValues() (v, r, s *big.Int) {
+	return new(big.Int), new(big.Int), new(big.Int)
+}
+
+func (tx *Rip7560BundleHeaderTx) setSignatureValues(chainID, v, r, s *big.Int) {}
+
+func (tx *Rip7560BundleHeaderTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
+	return new(big.Int)
+}
+func (tx *Rip7560BundleHeaderTx) encode(b *bytes.Buffer) error {
+	return rlp.Encode(b, tx)
+}
+
+func (tx *Rip7560BundleHeaderTx) decode(input []byte) error {
+	return rlp.DecodeBytes(input, tx)
+}
+
 // Rip7560Transaction an equivalent of a solidity struct only used to encode the 'transaction' parameter
 type Rip7560Transaction struct {
 	Sender               common.Address
