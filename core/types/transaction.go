@@ -51,6 +51,8 @@ const (
 	DynamicFeeTxType = 0x02
 	BlobTxType       = 0x03
 	Rip7560Type      = 0x04
+	// TODO: do we really need a new type?
+	Rip7560BundleHeaderType = 0x05
 )
 
 // Transaction is an Ethereum transaction.
@@ -214,6 +216,8 @@ func (tx *Transaction) decodeTyped(b []byte) (TxData, error) {
 		inner = new(BlobTx)
 	case Rip7560Type:
 		inner = new(Rip7560AccountAbstractionTx)
+	case Rip7560BundleHeaderType:
+		inner = new(Rip7560BundleHeaderTx)
 	case DepositTxType:
 		inner = new(DepositTx)
 	default:
@@ -435,6 +439,27 @@ func (tx *Transaction) BigNonce() *big.Int {
 	return nil
 }
 
+func (tx *Transaction) BlockNumber() *big.Int {
+	if dep, ok := tx.inner.(*Rip7560BundleHeaderTx); ok {
+		return dep.BlockNumber
+	}
+	return nil
+}
+
+func (tx *Transaction) TransactionCount() uint64 {
+	if dep, ok := tx.inner.(*Rip7560BundleHeaderTx); ok {
+		return dep.TransactionCount
+	}
+	return 0
+}
+
+func (tx *Transaction) TransactionIndex() uint64 {
+	if dep, ok := tx.inner.(*Rip7560BundleHeaderTx); ok {
+		return dep.TransactionIndex
+	}
+	return 0
+}
+
 // Cost returns (gas * gasPrice) + (blobGas * blobGasPrice) + value.
 func (tx *Transaction) Cost() *big.Int {
 	total := new(big.Int).Mul(tx.GasPrice(), new(big.Int).SetUint64(tx.Gas()))
@@ -610,6 +635,12 @@ func (tx *Transaction) Rip7560TransactionData() *Rip7560AccountAbstractionTx {
 	return ptr
 }
 
+func (tx *Transaction) Rip7560BundleHeaderTransactionData() *Rip7560BundleHeaderTx {
+	inner := tx.inner
+	ptr := inner.(*Rip7560BundleHeaderTx)
+	return ptr
+}
+
 // SetTime sets the decoding time of a transaction. This is used by tests to set
 // arbitrary times and by persistent transaction pools when loading old txs from
 // disk.
@@ -632,6 +663,9 @@ func (tx *Transaction) Hash() common.Hash {
 	var h common.Hash
 	if tx.Type() == LegacyTxType {
 		h = rlpHash(tx.inner)
+	} else if tx.Type() == Rip7560BundleHeaderType {
+		rlpHash := rlpHash(tx.Rip7560BundleHeaderTransactionData())
+		h = crypto.Keccak256Hash(append([]byte{Rip7560Type, ScaTransactionSubtype}, rlpHash[:]...))
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}

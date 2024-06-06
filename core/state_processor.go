@@ -82,15 +82,19 @@ func (p *StateProcessor) Process(block *types.Block, statedb *state.StateDB, cfg
 	}
 	// Iterate over and process the individual transactions
 	for i, tx := range block.Transactions() {
-		if tx.Type() == types.Rip7560Type {
-			// HandleRip7560Transactions accepts a transaction array and in the future bundle handling will need this
-			tmpTxs := [1]*types.Transaction{tx}
-			_, validatedTxsReceipts, validateTxsLogs, err := HandleRip7560Transactions(tmpTxs[:], 0, statedb, &context.Coinbase, header, gp, p.config, p.bc, cfg)
+		// TODO: HandleRip7560Transactions accepts a transaction array and in the future bundle handling will need this
+		if tx.Type() == types.Rip7560BundleHeaderType {
+			rip7560TxCnt := int(tx.Rip7560BundleHeaderTransactionData().TransactionCount)
+			bundleTransactions := block.Transactions()[i : rip7560TxCnt+i+1]
+			_, validatedTxsReceipts, validateTxsLogs, err := HandleRip7560Transactions(bundleTransactions, 0, statedb, &context.Coinbase, header, gp, p.config, p.bc, cfg)
 			receipts = append(receipts, validatedTxsReceipts...)
 			allLogs = append(allLogs, validateTxsLogs...)
 			if err != nil {
 				return nil, nil, 0, err
 			}
+			continue
+		} else if tx.Type() == types.Rip7560Type {
+			// handled in bundleHeaderType
 			continue
 		}
 		msg, err := TransactionToMessage(tx, signer, header.BaseFee)
