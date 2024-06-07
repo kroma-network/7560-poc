@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/tests"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/assert"
@@ -59,7 +58,6 @@ func runProcess(t *testContext, aatxs []*types.Rip7560AccountAbstractionTx) erro
 	defer state.Close()
 	cacheConfig := &core.CacheConfig{}
 	chainOverrides := core.ChainOverrides{}
-	log.Info("isOptimismEnabled", "isOptimismEnabled", cacheConfig)
 
 	engine := beacon.New(ethash.NewFaker())
 	lookupLimit := uint64(0)

@@ -34,6 +34,7 @@ type ValidationPhaseResult struct {
 	PmValidUntil           uint64
 	Payment                *common.Address
 	PrepaidGas             *uint256.Int
+	Receipts               []*types.Receipt
 }
 
 // HandleRip7560Transactions apply state changes of all sequential RIP-7560 transactions and return
@@ -60,12 +61,12 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	validatedTransactions := make([]*types.Transaction, 0)
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
-	for _, tx := range transactions[index:] {
+	for i, tx := range transactions[index:] {
 		if tx.Type() != types.Rip7560Type {
 			break
 		}
 
-		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
+		statedb.SetTxContext(tx.Hash(), index+i)
 		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
 		if err != nil {
 			// TODO : do we have to drop bundle?
@@ -76,7 +77,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		// we will revert to the previous state and invalidate the transaction.
 		var snapshot = statedb.Snapshot()
 		var vpr *ValidationPhaseResult
-		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
+		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, index+i)
 		if err != nil {
 			// If an error occurs in the validation phase, invalidate the transaction
 			statedb.RevertToSnapshot(snapshot)
@@ -88,6 +89,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		vpr.PrepaidGas = prepaidGas
 		validationPhaseResults = append(validationPhaseResults, vpr)
 		validatedTransactions = append(validatedTransactions, tx)
+		receipts = append(receipts, vpr.Receipts...)
 	}
 
 	// This is the line separating the Validation and Execution phases
@@ -144,7 +146,7 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	return &chargeFrom, mggas, nil
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config) (*ValidationPhaseResult, error) {
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, index int) (*ValidationPhaseResult, error) {
 	/*** Nonce Validation Frame ***/
 	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
@@ -152,6 +154,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	txContext.Origin = *tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
+	var vpReceipts []*types.Receipt
 	var nonceValidationUsedGas uint64
 	resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
 	if err != nil {
@@ -161,6 +164,9 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		return nil, resultNonceManager.Err
 	}
 	nonceValidationUsedGas = resultNonceManager.UsedGas
+	nonceRoot := statedb.IntermediateRoot(false).Bytes()
+	nonceReceipt := makeValidationPhaseReceipts(tx, nonceRoot, nonceValidationUsedGas, 0)
+	vpReceipts = append(vpReceipts, nonceReceipt)
 
 	/*** Deployer Frame ***/
 	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas)
@@ -178,6 +184,9 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 			return nil, errors.New("deployed address mismatch - invalid transaction")
 		}
 		deploymentUsedGas = resultDeployer.UsedGas
+		deploymentRoot := statedb.IntermediateRoot(false).Bytes()
+		deploymentReceipt := makeValidationPhaseReceipts(tx, deploymentRoot, deploymentUsedGas, 1)
+		vpReceipts = append(vpReceipts, deploymentReceipt)
 	}
 
 	/*** Account Validation Frame ***/
@@ -199,8 +208,14 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	if err != nil {
 		return nil, err
 	}
+	accountValidationRoot := statedb.IntermediateRoot(false).Bytes()
+	accountValidationReceipt := makeValidationPhaseReceipts(tx, accountValidationRoot, resultAccountValidation.UsedGas, 2)
+	vpReceipts = append(vpReceipts, accountValidationReceipt)
 
-	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header)
+	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, pfReceipt, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, index)
+	if pfReceipt != nil {
+		vpReceipts = append(vpReceipts, pfReceipt)
+	}
 	vpr := &ValidationPhaseResult{
 		Tx:                     tx,
 		TxHash:                 tx.Hash(),
@@ -213,41 +228,44 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		SenderValidUntil:       validUntil,
 		PmValidAfter:           pmValidAfter,
 		PmValidUntil:           pmValidUntil,
+		Receipts:               vpReceipts,
 	}
 
 	return vpr, nil
 }
 
-func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header) ([]byte, uint64, uint64, uint64, error) {
+func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header, index int) ([]byte, uint64, uint64, uint64, *types.Receipt, error) {
 	/*** Paymaster Validation Frame ***/
 	var pmValidationUsedGas uint64
 	var paymasterContext []byte
 	var pmValidAfter uint64
 	var pmValidUntil uint64
+	var paymasterValidationFrameReceipt *types.Receipt
 	paymasterMsg, err := preparePaymasterValidationMessage(tx, chainConfig, signingHash)
 	if err != nil {
-		return nil, 0, 0, 0, err
+		return nil, 0, 0, 0, nil, err
 	}
 	if paymasterMsg != nil {
 		resultPm, err := ApplyMessage(evm, paymasterMsg, gp)
 		if err != nil {
-			return nil, 0, 0, 0, err
+			return nil, 0, 0, 0, nil, err
 		}
-		statedb.IntermediateRoot(true)
 		if resultPm.Failed() {
-			return nil, 0, 0, 0, errors.New("paymaster validation failed - invalid transaction")
+			return nil, 0, 0, 0, nil, errors.New("paymaster validation failed - invalid transaction")
 		}
 		pmValidationUsedGas = resultPm.UsedGas
 		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData)
 		if err != nil {
-			return nil, 0, 0, 0, err
+			return nil, 0, 0, 0, nil, err
 		}
 		err = validateValidityTimeRange(header.Time, pmValidAfter, pmValidUntil)
 		if err != nil {
-			return nil, 0, 0, 0, err
+			return nil, 0, 0, 0, nil, err
 		}
+		paymasterValidationFrameRoot := statedb.IntermediateRoot(false).Bytes()
+		paymasterValidationFrameReceipt = makeValidationPhaseReceipts(tx, paymasterValidationFrameRoot, pmValidationUsedGas, 3)
 	}
-	return paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, nil
+	return paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, paymasterValidationFrameReceipt, nil
 }
 
 func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *ExecutionResult, evm *vm.EVM, gp *GasPool) (*ExecutionResult, error) {
@@ -501,6 +519,25 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
 	}, nil
+}
+
+func makeValidationPhaseReceipts(tx *types.Transaction, root []byte, gasUsed uint64, frameIndex uint8) *types.Receipt {
+	receipt := &types.Receipt{Type: tx.Type(), PostState: root, CumulativeGasUsed: gasUsed}
+	// Receipt is only generated when the whole validation phase is successful
+	receipt.Status = types.ReceiptStatusSuccessful
+	// TODO: add frameIndex+1 to the receipt
+	hashBytes := tx.Hash().Bytes()
+	hashBytes[len(hashBytes)-1] = hashBytes[len(hashBytes)-1] + frameIndex + 1
+	receipt.TxHash = common.BytesToHash(hashBytes) // + frameIndex + 1
+	receipt.GasUsed = gasUsed
+
+	if frameIndex == 1 {
+		receipt.ContractAddress = common.BytesToAddress(tx.Rip7560TransactionData().Sender.Bytes())
+	}
+
+	receipt.Logs = make([]*types.Log, 0)
+	receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+	return receipt
 }
 
 func validateAccountReturnData(data []byte) (uint64, uint64, error) {
