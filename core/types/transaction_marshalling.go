@@ -528,7 +528,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			inner = &depositTxWithNonce{DepositTx: itx, EffectiveNonce: uint64(*dec.Nonce)}
 		}
 	case Rip7560Type:
-		log.Info("Unmarshal Rip7560Type JSON")
 		log.Info(string(debug.Stack()))
 		var itx Rip7560AccountAbstractionTx
 		inner = &itx
@@ -603,7 +602,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		}
 		itx.Value = (*big.Int)(dec.Value)
 	case Rip7560BundleHeaderType:
-		log.Info("Unmarshal Rip756BundleHeaderType JSON")
 		log.Info(string(debug.Stack()))
 		var itx Rip7560BundleHeaderTx
 		inner = &itx
