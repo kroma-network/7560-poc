@@ -1567,7 +1567,6 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.BlobVersionedHashes = tx.BlobHashes()
 
 	case types.Rip7560Type:
-		log.Info("rip7560 new RpcTransaction")
 		al := tx.AccessList()
 		result.Accesses = &al
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
@@ -1585,7 +1584,6 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.PostOpGas = (hexutil.Uint64)(tx.PostOpGas())
 		result.BigNonce = (*hexutil.Big)(tx.BigNonce())
 	case types.Rip7560BundleHeaderType:
-		log.Info("rip7560(bundleHeader) new RpcTransaction")
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
 		result.TransactionCount = (hexutil.Uint64)(tx.TransactionCount())
 	}
