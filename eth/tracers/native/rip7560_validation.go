@@ -32,28 +32,40 @@ func newRip7560Tracer(ctx *tracers.Context, cfg json.RawMessage) (tracers.Tracer
 }
 
 type Level struct {
-	Oog                   bool                         `json:"oog,omitempty"`
-	Access                map[string]*Access           `json:"access,omitempty"`
-	Opcodes               map[string]int               `json:"opcodes,omitempty"`
-	ExtCodeAccessInfo     map[string]string            `json:"extCodeAccessInfo,omitempty"`
-	ContractSize          map[string]*ContractSizeInfo `json:"contractSize,omitempty"`
-	TopLevelMethodSig     string                       `json:"topLevelMethodSig,omitempty"`
-	TopLevelTargetAddress string                       `json:"topLevelTargetAddress,omitempty"`
+	TopLevelMethodSig     hexutil.Bytes        `json:"topLevelMethodSig,omitempty"`
+	TopLevelTargetAddress common.Address       `json:"topLevelTargetAddress,omitempty"`
+	Opcodes               Counts               `json:"opcodes,omitempty"`
+	Access                AccessMap            `json:"access,omitempty"`
+	ContractSize          ContractSizeMap      `json:"contractSize,omitempty"`
+	ExtCodeAccessInfo     ExtCodeAccessInfoMap `json:"extCodeAccessInfo,omitempty"`
+	Oog                   bool                 `json:"oog,omitempty"`
 }
 
+type Counts = map[string]int
+type HexMap = map[string]string
+
+// AccessInfo provides context on read and write counts by storage slots.
+type AccessInfo struct {
+	Reads  HexMap `json:"reads"`
+	Writes Counts `json:"writes"`
+}
+
+type AccessMap = map[common.Address]AccessInfo
+
+// ContractSizeInfo provides context on the code size and call type used to access upstream contracts.
 type ContractSizeInfo struct {
 	ContractSize int    `json:"contractSize"`
 	Opcode       string `json:"opcode"`
 }
 
+type ContractSizeMap map[common.Address]ContractSizeInfo
+
+// ExtCodeAccessInfoMap provides context on potentially illegal use of EXTCODESIZE.
+type ExtCodeAccessInfoMap map[common.Address]string
+
 type OpInfo struct {
 	Opcode    string     `json:"opcode"`
 	StackTop3 []*big.Int `json:"stackTop3"`
-}
-
-type Access struct {
-	Reads  map[string]string `json:"reads,omitempty"`
-	Writes map[string]int    `json:"writes,omitempty"`
 }
 
 // Array fields contain of all access details of all validation frames
@@ -100,16 +112,16 @@ func (t *rip7560ValidationTracer) CaptureStart(env *vm.EVM, from common.Address,
 		t.calls[len(t.calls)-1].Type = vm.CREATE
 	}
 
-	topLevelTargetAddress := toCopy.Hex()
-	topLevelMethodSig := common.Bytes2Hex(input[0:4])
+	topLevelTargetAddress := toCopy
+	topLevelMethodSig := input[0:4]
 
 	t.currentLevel = &Level{
 		TopLevelMethodSig:     topLevelMethodSig,
 		TopLevelTargetAddress: topLevelTargetAddress,
-		Access:                map[string]*Access{},
-		Opcodes:               map[string]int{},
-		ExtCodeAccessInfo:     map[string]string{},
-		ContractSize:          map[string]*ContractSizeInfo{},
+		Access:                AccessMap{},
+		Opcodes:               Counts{},
+		ExtCodeAccessInfo:     ExtCodeAccessInfoMap{},
+		ContractSize:          ContractSizeMap{},
 	}
 	t.callsFromEntryPoint = append(t.callsFromEntryPoint, t.currentLevel)
 	t.topLevelCallCounter++
@@ -157,7 +169,7 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 	matched, _ := regexp.MatchString("^(EXT.*)$", lastOpInfo.Opcode)
 	if matched {
 		addr := lastOpInfo.StackTop3[0].Text(16)
-		addrHex := addr[2:]
+		addrHex := common.HexToAddress(addr[2:])
 		last3opcodesString := ""
 		for _, x := range t.lastThreeOpcodes {
 			last3opcodesString += x.Opcode + ","
@@ -186,8 +198,9 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 			}
 		}
 		addr := stackData[stackSize-idx-1].Hex()
-		if _, exists := t.currentLevel.ContractSize[addr]; !exists && !isAllowedPrecompiled(addr) {
-			t.currentLevel.ContractSize[addr] = &ContractSizeInfo{
+		addrHex := common.HexToAddress(addr)
+		if _, exists := t.currentLevel.ContractSize[addrHex]; !exists && !isAllowedPrecompiled(addr) {
+			t.currentLevel.ContractSize[addrHex] = ContractSizeInfo{
 				ContractSize: len(t.env.StateDB.GetCode(common.HexToAddress(addr))),
 				Opcode:       op.String(),
 			}
@@ -210,16 +223,17 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 	case vm.SLOAD, vm.SSTORE:
 		slot := stackData[stackSize-1].Hex()
 		addr := scope.Contract.Address().Hex()
+		addrHex := common.HexToAddress(addr)
 		if t.currentLevel.Access == nil {
-			t.currentLevel.Access = map[string]*Access{}
+			t.currentLevel.Access = AccessMap{}
 		}
-		access, exists := t.currentLevel.Access[addr]
+		access, exists := t.currentLevel.Access[addrHex]
 		if !exists {
-			access = &Access{
-				Reads:  make(map[string]string),
-				Writes: make(map[string]int),
+			access = AccessInfo{
+				Reads:  make(HexMap),
+				Writes: make(Counts),
 			}
-			t.currentLevel.Access[addr] = access
+			t.currentLevel.Access[addrHex] = access
 		}
 
 		if op == vm.SLOAD {
@@ -235,7 +249,7 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 		offset := int(stackData[stackSize-1].Uint64())
 		length := int(stackData[stackSize-2].Uint64())
 		if length > 20 && length < 512 {
-			t.keccak = append(t.keccak, common.Bytes2Hex(scope.Memory.Data()[offset:offset+length]))
+			t.keccak = append(t.keccak, hexutil.Encode(scope.Memory.Data()[offset:offset+length]))
 		}
 	case vm.LOG0, vm.LOG1, vm.LOG2, vm.LOG3, vm.LOG4:
 		count, _ := strconv.Atoi(op.String()[3:])
@@ -335,7 +349,7 @@ func (t *rip7560ValidationTracer) Stop(err error) {
 	t.interrupt.Store(true)
 }
 
-func (t *rip7560ValidationTracer) countSlot(m map[string]int, key string) {
+func (t *rip7560ValidationTracer) countSlot(m Counts, key string) {
 	if _, exists := m[key]; exists {
 		m[key]++
 	} else {
