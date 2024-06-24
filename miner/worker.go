@@ -1111,6 +1111,9 @@ func (w *worker) commitRip7560TransactionsBundle(env *environment, txs *types.Ex
 		env.gasPool = new(core.GasPool).AddGas(gasLimit)
 	}
 	validatedTxs, receipts, _, err := core.HandleRip7560Transactions(txs.Transactions, 0, env.state, &env.coinbase, env.header, env.gasPool, w.chainConfig, w.chain, vm.Config{})
+	if len(validatedTxs) == 0 {
+		return nil
+	}
 
 	// adding RIP-7560 bundle header transaction
 	bundleHeaderTx := types.NewTx(&types.Rip7560BundleHeaderTx{
@@ -1129,7 +1132,6 @@ func (w *worker) commitRip7560TransactionsBundle(env *environment, txs *types.Ex
 
 	env.txs = append(env.txs, validatedTxs...)
 	env.receipts = append(env.receipts, receipts...)
-	env.tcount += len(validatedTxs)
 	return err
 }
 
