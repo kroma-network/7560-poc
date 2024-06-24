@@ -19,15 +19,13 @@ package types
 import (
 	"encoding/json"
 	"errors"
-	"io"
-	"math/big"
-	"runtime/debug"
-
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
+	"io"
+	"math/big"
 )
 
 // txJSON is the JSON representation of transactions.
@@ -516,7 +514,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			inner = &depositTxWithNonce{DepositTx: itx, EffectiveNonce: uint64(*dec.Nonce)}
 		}
 	case Rip7560Type:
-		log.Info(string(debug.Stack()))
 		var itx Rip7560AccountAbstractionTx
 		inner = &itx
 
@@ -590,7 +587,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		}
 		itx.Value = (*big.Int)(dec.Value)
 	case Rip7560BundleHeaderType:
-		log.Info(string(debug.Stack()))
 		var itx Rip7560BundleHeaderTx
 		inner = &itx
 
