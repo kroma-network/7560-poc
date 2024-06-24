@@ -74,16 +74,17 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			break
 		}
 
+		// No issues should occur during the validation phase.
+		// However, in the unlikely event that something goes wrong,
+		// we will revert to the previous state and invalidate the transaction.
+		var snapshot = statedb.Snapshot()
+
 		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
 		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
 		if err != nil {
 			// TODO : do we have to drop bundle?
 			continue
 		}
-		// No issues should occur during the validation phase.
-		// However, in the unlikely event that something goes wrong,
-		// we will revert to the previous state and invalidate the transaction.
-		var snapshot = statedb.Snapshot()
 		var vpr *ValidationPhaseResult
 		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
