@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -165,22 +166,43 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 }
 
 func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config) (*ValidationPhaseResult, error) {
-	/*** Nonce Validation Frame ***/
-	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
-	txContext := NewEVMTxContext(nonceValidationMsg)
-	txContext.Origin = *tx.Rip7560TransactionData().Sender
+	txContext := vm.TxContext{
+		Origin:   *tx.Rip7560TransactionData().Sender,
+		GasPrice: tx.GasFeeCap(),
+	}
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
+	/*** Nonce Validation Frame ***/
+	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	var nonceValidationUsedGas uint64
-	resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
-	if err != nil {
-		return nil, err
+	if nonceValidationMsg != nil {
+		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
+		if err != nil {
+			return nil, err
+		}
+		if resultNonceManager.Err != nil {
+			return nil, resultNonceManager.Err
+		}
+		nonceValidationUsedGas = resultNonceManager.UsedGas
+	} else {
+		// Use legacy nonce validation
+		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
+		// TODO(sm-stack): add error messages like ErrNonceTooLow, ErrNonceTooHigh, etc.
+		if msgNonce := tx.Rip7560TransactionData().BigNonce.Uint64(); stNonce != msgNonce {
+			return nil, errors.New("nonce validation failed - invalid transaction")
+		} else if stNonce == 0 {
+			deployerData := tx.Rip7560TransactionData().DeployerData
+			if len(deployerData) < 20 {
+				return nil, errors.New("nonce validation failed - invalid transaction")
+			}
+			if bytes.Equal(deployerData[:20], common.Address{}.Bytes()) {
+				return nil, errors.New("nonce validation failed - invalid transaction")
+			}
+		} else {
+			statedb.SetNonce(txContext.Origin, stNonce+1)
+		}
 	}
-	if resultNonceManager.Err != nil {
-		return nil, resultNonceManager.Err
-	}
-	nonceValidationUsedGas = resultNonceManager.UsedGas
 
 	/*** Deployer Frame ***/
 	deployerMsg := prepareDeployerMessage(tx, chainConfig, nonceValidationUsedGas)
@@ -227,7 +249,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		PaymasterContext:       paymasterContext,
 		NonceValidationUsedGas: nonceValidationUsedGas,
 		DeploymentUsedGas:      deploymentUsedGas,
-		ValidationUsedGas:      resultAccountValidation.UsedGas,
+		ValidationUsedGas:      resultAccountValidation.UsedGas + params.Tx7560BaseGas,
 		PmValidationUsedGas:    pmValidationUsedGas,
 		SenderValidAfter:       validAfter,
 		SenderValidUntil:       validUntil,
@@ -373,6 +395,11 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 	key := make([]byte, 32)
 	fromBig, _ := uint256.FromBig(tx.BigNonce)
 	fromBig.WriteToSlice(key)
+
+	// Use legacy nonce validation if the key is all zeros
+	if bytes.Equal(key[:24], make([]byte, 24)) {
+		return nil
+	}
 
 	nonceValidationData := make([]byte, 0)
 	nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
