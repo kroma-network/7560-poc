@@ -105,7 +105,20 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
 		statedb.SetTxContext(vpr.Tx.Hash(), i)
-		receipt, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, vpr.Payment, vpr.PrepaidGas)
+		executionResult, paymasterPostOpResult, cumulativeGasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, vpr.Payment, vpr.PrepaidGas)
+
+		root := statedb.IntermediateRoot(true).Bytes()
+		receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, CumulativeGasUsed: cumulativeGasUsed}
+
+		// Set the receipt logs and create the bloom filter.
+		receipt.Logs = statedb.GetLogs(vpr.Tx.Hash(), header.Number.Uint64(), header.Hash())
+
+		if executionResult.Failed() || (paymasterPostOpResult != nil && paymasterPostOpResult.Failed()) {
+			receipt.Status = types.ReceiptStatusFailed
+		} else {
+			receipt.Status = types.ReceiptStatusSuccessful
+		}
+
 		if err != nil {
 			return nil, nil, nil, err
 		}
@@ -307,7 +320,7 @@ func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *Exec
 	return paymasterPostOpResult, nil
 }
 
-func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, payment *common.Address, prepaidGas *uint256.Int) (*types.Receipt, error) {
+func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, payment *common.Address, prepaidGas *uint256.Int) (*ExecutionResult, *ExecutionResult, uint64, error) {
 	// revert back here if postOp fails
 	var snapshot = statedb.Snapshot()
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
@@ -318,14 +331,14 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
 	executionResult, err := ApplyMessage(evm, accountExecutionMsg, gp)
 	if err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 
 	var paymasterPostOpResult *ExecutionResult
 	if len(vpr.PaymasterContext) != 0 {
 		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp)
 		if err != nil {
-			return nil, err
+			return nil, nil, 0, err
 		}
 		// revert the execution phase changes
 		if paymasterPostOpResult.Failed() {
@@ -334,7 +347,8 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	}
 
 	cumulativeGasUsed :=
-		vpr.ValidationUsedGas +
+		vpr.NonceValidationUsedGas +
+			vpr.ValidationUsedGas +
 			vpr.DeploymentUsedGas +
 			vpr.PmValidationUsedGas +
 			executionResult.UsedGas
@@ -348,7 +362,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	rules := evm.ChainConfig().Rules(evm.Context.BlockNumber, evm.Context.Random != nil, evm.Context.Time)
 	intrGas, err := IntrinsicGas(vpr.Tx.Data(), vpr.Tx.AccessList(), false, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, false)
 	if err != nil {
-		return nil, err
+		return nil, nil, 0, err
 	}
 	cumulativeGasUsed += intrGas
 
@@ -364,29 +378,18 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(cumulativeGasUsed), evm.Context.BaseFee)
 	amtU256, overflow := uint256.FromBig(gasCost)
 	if overflow {
-		return nil, fmt.Errorf("optimism gas cost overflows U256: %d", gasCost)
+		return nil, nil, 0, fmt.Errorf("optimism gas cost overflows U256: %d", gasCost)
 	}
 	statedb.AddBalance(params.OptimismBaseFeeRecipient, amtU256)
 	if l1Cost := evm.Context.L1CostFunc(vpr.Tx.RollupCostData(), evm.Context.Time); l1Cost != nil {
 		amtU256, overflow = uint256.FromBig(l1Cost)
 		if overflow {
-			return nil, fmt.Errorf("optimism l1 cost overflows U256: %d", l1Cost)
+			return nil, nil, 0, fmt.Errorf("optimism l1 cost overflows U256: %d", l1Cost)
 		}
 		statedb.AddBalance(params.OptimismL1FeeRecipient, amtU256)
 	}
 
-	root := statedb.IntermediateRoot(true).Bytes()
-	receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, CumulativeGasUsed: cumulativeGasUsed}
-
-	// Set the receipt logs and create the bloom filter.
-	receipt.Logs = statedb.GetLogs(vpr.Tx.Hash(), header.Number.Uint64(), header.Hash())
-
-	if executionResult.Failed() || (paymasterPostOpResult != nil && paymasterPostOpResult.Failed()) {
-		receipt.Status = types.ReceiptStatusFailed
-	} else {
-		receipt.Status = types.ReceiptStatusSuccessful
-	}
-	return receipt, err
+	return executionResult, paymasterPostOpResult, cumulativeGasUsed, nil
 }
 
 func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
