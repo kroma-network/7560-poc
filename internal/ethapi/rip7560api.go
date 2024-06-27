@@ -5,10 +5,12 @@ import (
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/common"
+	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/core"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
+	"github.com/ethereum/go-ethereum/eth/gasestimator"
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
@@ -17,6 +19,11 @@ import (
 	"math/big"
 	"time"
 )
+
+type Rip7560UsedGas struct {
+	ValidationGas hexutil.Uint64 `json:"validationGas"`
+	ExecutionGas  hexutil.Uint64 `json:"executionGas"`
+}
 
 func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args []TransactionArgs, creationBlock *big.Int, expectedRevenue *big.Int, bundlerId string) (common.Hash, error) {
 	if len(args) == 0 {
@@ -70,6 +77,11 @@ func (s *TransactionAPI) CallRip7560Validation(ctx context.Context, args Transac
 	return result, nil
 }
 
+// SubmitRip7560Bundle is a helper function that submits a bundle of Type 4 transactions to txPool and logs a message.
+func SubmitRip7560Bundle(ctx context.Context, b Backend, bundle *types.ExternallyReceivedBundle) error {
+	return b.SubmitRip7560Bundle(bundle)
+}
+
 func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArgs, state *state.StateDB, header *types.Header, overrides *StateOverride, blockOverrides *BlockOverrides, timeout time.Duration, globalGasCap uint64) (*core.ValidationPhaseResult, error) {
 	if err := overrides.Apply(state); err != nil {
 		return nil, err
@@ -87,16 +99,14 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 	defer cancel()
 
 	// Get a new instance of the EVM.
-	blockCtx := core.NewEVMBlockContext(header, NewChainContext(ctx, b), nil, b.ChainConfig(), state)
-	if blockOverrides != nil {
-		blockOverrides.Apply(&blockCtx)
-	}
-
 	tx := args.ToTransaction()
 
 	chainConfig := b.ChainConfig()
 	bc := NewChainContext(ctx, b)
 	blockContext := core.NewEVMBlockContext(header, bc, &header.Coinbase, chainConfig, state)
+	if blockOverrides != nil {
+		blockOverrides.Apply(&blockContext)
+	}
 	txContext := vm.TxContext{
 		Origin:   *tx.Rip7560TransactionData().Sender,
 		GasPrice: tx.GasPrice(),
@@ -144,6 +154,69 @@ func DoCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 	return doCallRip7560Validation(ctx, b, args, state, header, overrides, blockOverrides, timeout, globalGasCap)
 }
 
+func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args TransactionArgs, blockNrOrHash rpc.BlockNumberOrHash, overrides *StateOverride, gasCap uint64) (*Rip7560UsedGas, error) {
+	state, header, err := b.StateAndHeaderByNumberOrHash(ctx, blockNrOrHash)
+	if state == nil || err != nil {
+		return nil, err
+	}
+	if err = overrides.Apply(state); err != nil {
+		return nil, err
+	}
+	// Construct the gas estimator option from the user input
+	chainConfig := b.ChainConfig()
+	bc := NewChainContext(ctx, b)
+	tx := args.ToTransaction()
+
+	gp := new(core.GasPool).AddGas(math.MaxUint64)
+	payment, prepaidGas, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	if err != nil {
+		return nil, err
+	}
+	opts := &gasestimator.Options{
+		Config:     chainConfig,
+		Chain:      bc,
+		Header:     header,
+		State:      state,
+		ErrorRatio: estimateGasErrorRatio,
+		Payment:    payment,
+		PrepaidGas: prepaidGas,
+	}
+
+	vg, err := gasestimator.EstimateRip7560Validation(ctx, tx, opts, gasCap)
+	if err != nil {
+		return nil, err
+	}
+
+	eg, _, err := gasestimator.EstimateRip7560Execution(ctx, tx, opts, gasCap)
+	if err != nil {
+		return nil, err
+	}
+
+	return &Rip7560UsedGas{
+		ValidationGas: hexutil.Uint64(vg),
+		ExecutionGas:  hexutil.Uint64(eg),
+	}, nil
+}
+
+func (s *BlockChainAPI) EstimateRip7560TransactionGas(ctx context.Context, args TransactionArgs, blockNrOrHash *rpc.BlockNumberOrHash, overrides *StateOverride) (*Rip7560UsedGas, error) {
+	bNrOrHash := rpc.BlockNumberOrHashWithNumber(rpc.LatestBlockNumber)
+	if blockNrOrHash != nil {
+		bNrOrHash = *blockNrOrHash
+	}
+
+	// TODO(sm-stack): Configure RIP-7560 enabled devnet option
+	//header, err := headerByNumberOrHash(ctx, s.b, bNrOrHash)
+	//if err != nil {
+	//	return 0, err
+	//}
+
+	//if s.b.ChainConfig().IsRIP7560(header.Number) {
+	//	return 0, fmt.Errorf("cannot estimate gas for RIP-7560 tx on pre-bedrock block %v", header.Number)
+	//}
+
+	return DoEstimateRip7560TransactionGas(ctx, s.b, args, bNrOrHash, overrides, s.b.RPCGasCap())
+}
+
 // TODO: If this code is indeed necessary, keep it in utils; better - remove altogether.
 func calculateBundleHash(txs []*types.Transaction) common.Hash {
 	appendedTxIds := make([]byte, 0)
@@ -160,9 +233,4 @@ func rlpHash(x interface{}) (h common.Hash) {
 	rlp.Encode(hw, x)
 	hw.Sum(h[:0])
 	return h
-}
-
-// SubmitRip7560Bundle is a helper function that submits a bundle of Type 4 transactions to txPool and logs a message.
-func SubmitRip7560Bundle(ctx context.Context, b Backend, bundle *types.ExternallyReceivedBundle) error {
-	return b.SubmitRip7560Bundle(bundle)
 }
