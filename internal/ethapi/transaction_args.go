@@ -92,6 +92,27 @@ func (args *TransactionArgs) data() []byte {
 	return nil
 }
 
+func (args *TransactionArgs) signature() []byte {
+	if args.Signature != nil {
+		return *args.Signature
+	}
+	return nil
+}
+
+func (args *TransactionArgs) paymasterData() []byte {
+	if args.PaymasterData != nil {
+		return *args.PaymasterData
+	}
+	return nil
+}
+
+func (args *TransactionArgs) deployerData() []byte {
+	if args.DeployerData != nil {
+		return *args.DeployerData
+	}
+	return nil
+}
+
 // setDefaults fills in default values for unspecified tx fields.
 func (args *TransactionArgs) setDefaults(ctx context.Context, b Backend) error {
 	if err := args.setFeeDefaults(ctx, b); err != nil {
@@ -374,9 +395,9 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			AccessList: al,
 			// RIP-7560 parameters
 			Sender:        args.Sender,
-			Signature:     *args.Signature,
-			PaymasterData: *args.PaymasterData,
-			DeployerData:  *args.DeployerData,
+			Signature:     args.signature(),
+			PaymasterData: args.paymasterData(),
+			DeployerData:  args.deployerData(),
 			BuilderFee:    (*big.Int)(args.BuilderFee),
 			ValidationGas: uint64(*args.ValidationGas),
 			PaymasterGas:  uint64(*args.PaymasterGas),
