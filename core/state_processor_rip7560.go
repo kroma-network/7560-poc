@@ -77,7 +77,10 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		// No issues should occur during the validation phase.
 		// However, in the unlikely event that something goes wrong,
 		// we will revert to the previous state and invalidate the transaction.
-		var snapshot = statedb.Snapshot()
+		var (
+			snapshot = statedb.Snapshot()
+			prevGas  = gp.Gas()
+		)
 
 		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
 		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
@@ -90,6 +93,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		if err != nil {
 			// If an error occurs in the validation phase, invalidate the transaction
 			statedb.RevertToSnapshot(snapshot)
+			gp.SetGas(prevGas)
 			continue
 		}
 		statedb.IntermediateRoot(true)
