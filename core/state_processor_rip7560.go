@@ -552,12 +552,12 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 }
 
 func validateAccountReturnData(data []byte) (uint64, uint64, error) {
-	MAGIC_VALUE_SENDER := uint32(0xbf45c166)
+	var MAGIC_VALUE_SENDER = [20]byte{0xbf, 0x45, 0xc1, 0x66}
 	if len(data) != 32 {
 		return 0, 0, errors.New("invalid account return data length")
 	}
-	magicExpected := binary.BigEndian.Uint32(data[:4])
-	if magicExpected != MAGIC_VALUE_SENDER {
+	magicExpected := common.Bytes2Hex(data[:20])
+	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(data[4:12])
@@ -566,9 +566,9 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 }
 
 func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
-	MAGIC_VALUE_PAYMASTER := uint32(0xe0e6183a)
+	var MAGIC_VALUE_PAYMASTER = [20]byte{0xe0, 0xe6, 0x18, 0x3a}
 	jsondata := `[
-		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "context","type": "bytes"},{"name": "validationData","type": "bytes32"}]}
+		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
 	]`
 	validatePaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
 	if err != nil {
@@ -577,8 +577,8 @@ func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 	}
 
 	var validatePaymasterResult struct {
-		Context        []byte
 		ValidationData [32]byte
+		Context        []byte
 	}
 
 	err = validatePaymasterTransactionAbi.UnpackIntoInterface(&validatePaymasterResult, "validatePaymasterTransaction", data)
@@ -588,8 +588,8 @@ func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 	if len(validatePaymasterResult.Context) > MaxContextSize {
 		return nil, 0, 0, errors.New("paymaster returned context size too large")
 	}
-	magicExpected := binary.BigEndian.Uint32(validatePaymasterResult.ValidationData[:4])
-	if magicExpected != MAGIC_VALUE_PAYMASTER {
+	magicExpected := common.Bytes2Hex(validatePaymasterResult.ValidationData[:20])
+	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
