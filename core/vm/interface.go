@@ -73,6 +73,8 @@ type StateDB interface {
 	// even if the feature/fork is not active yet
 	AddSlotToAccessList(addr common.Address, slot common.Hash)
 	Prepare(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList)
+	// [RIP-7560] reuse accesslist & transient storage
+	PrepareWithOption(rules params.Rules, sender, coinbase common.Address, dest *common.Address, precompiles []common.Address, txAccesses types.AccessList, reuseAccessList bool)
 
 	RevertToSnapshot(int)
 	Snapshot() int

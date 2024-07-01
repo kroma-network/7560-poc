@@ -1296,25 +1296,15 @@ func (s *StateDB) Commit(block uint64, deleteEmptyObjects bool) (common.Hash, er
 	return root, nil
 }
 
-// Prepare handles the preparatory steps for executing a state transition with.
-// This method must be invoked before state transition.
-//
-// Berlin fork:
-// - Add sender to access list (2929)
-// - Add destination to access list (2929)
-// - Add precompiles to access list (2929)
-// - Add the contents of the optional tx access list (2930)
-//
-// Potential EIPs:
-// - Reset access list (Berlin)
-// - Add coinbase to access list (EIP-3651)
-// - Reset transient storage (EIP-1153)
-func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+func (s *StateDB) PrepareWithOption(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList, reuseAccessList bool) {
 	if rules.IsBerlin {
-		// Clear out any leftover from previous executions
-		al := newAccessList()
-		s.accessList = al
-
+		al := s.accessList
+		// RIP-7560
+		if !reuseAccessList {
+			// Clear out any leftover from previous executions
+			al = newAccessList()
+			s.accessList = al
+		}
 		al.AddAddress(sender)
 		if dst != nil {
 			al.AddAddress(*dst)
@@ -1333,8 +1323,28 @@ func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, d
 			al.AddAddress(coinbase)
 		}
 	}
-	// Reset transient storage at the beginning of transaction execution
-	s.transientStorage = newTransientStorage()
+	// RIP-7560
+	if !reuseAccessList {
+		// Reset transient storage at the beginning of transaction execution
+		s.transientStorage = newTransientStorage()
+	}
+}
+
+// Prepare handles the preparatory steps for executing a state transition with.
+// This method must be invoked before state transition.
+//
+// Berlin fork:
+// - Add sender to access list (2929)
+// - Add destination to access list (2929)
+// - Add precompiles to access list (2929)
+// - Add the contents of the optional tx access list (2930)
+//
+// Potential EIPs:
+// - Reset access list (Berlin)
+// - Add coinbase to access list (EIP-3651)
+// - Reset transient storage (EIP-1153)
+func (s *StateDB) Prepare(rules params.Rules, sender, coinbase common.Address, dst *common.Address, precompiles []common.Address, list types.AccessList) {
+	s.PrepareWithOption(rules, sender, coinbase, dst, precompiles, list, false)
 }
 
 // AddAddressToAccessList adds the given address to the access list
