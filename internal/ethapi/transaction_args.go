@@ -121,6 +121,27 @@ func (args *TransactionArgs) paymasterData() []byte {
 	return nil
 }
 
+func (args *TransactionArgs) paymasterGas() uint64 {
+	if args.PaymasterGas != nil {
+		return uint64(*args.PaymasterGas)
+	}
+	return 0
+}
+
+func (args *TransactionArgs) validationGas() uint64 {
+	if args.ValidationGas != nil {
+		return uint64(*args.ValidationGas)
+	}
+	return 0
+}
+
+func (args *TransactionArgs) postOpGas() uint64 {
+	if args.PostOpGas != nil {
+		return uint64(*args.PostOpGas)
+	}
+	return 0
+}
+
 func (args *TransactionArgs) deployerData() []byte {
 	if args.DeployerData != nil {
 		return *args.DeployerData
@@ -513,9 +534,9 @@ func (args *TransactionArgs) ToTransaction() *types.Transaction {
 			PaymasterData: args.paymasterData(),
 			DeployerData:  args.deployerData(),
 			BuilderFee:    (*big.Int)(args.BuilderFee),
-			ValidationGas: uint64(*args.ValidationGas),
-			PaymasterGas:  uint64(*args.PaymasterGas),
-			PostOpGas:     uint64(*args.PostOpGas),
+			ValidationGas: args.validationGas(),
+			PaymasterGas:  args.paymasterGas(),
+			PostOpGas:     args.postOpGas(),
 			// RIP-7712 parameter
 			BigNonce: (*big.Int)(args.BigNonce),
 		}
