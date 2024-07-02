@@ -34,7 +34,7 @@ type Rip7560BundlerPool struct {
 	coinbase common.Address
 }
 
-func (pool *Rip7560BundlerPool) Init(_ uint64, head *types.Header, _ txpool.AddressReserver) error {
+func (pool *Rip7560BundlerPool) Init(_ *big.Int, head *types.Header, _ txpool.AddressReserver) error {
 	pool.pendingBundles = make([]*types.ExternallyReceivedBundle, 0)
 	pool.includedBundles = make(map[common.Hash]*types.BundleReceipt)
 	pool.currentHead.Store(head)
@@ -182,7 +182,7 @@ func (pool *Rip7560BundlerPool) Add(_ []*types.Transaction, _ bool, _ bool) []er
 	return nil
 }
 
-func (pool *Rip7560BundlerPool) Pending(_ txpool.PendingFilter) map[common.Address][]*txpool.LazyTransaction {
+func (pool *Rip7560BundlerPool) Pending(_ bool) map[common.Address][]*txpool.LazyTransaction {
 	return nil
 }
 
