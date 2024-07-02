@@ -503,12 +503,21 @@ func EstimateRip7560Execution(ctx context.Context, tx *types.Transaction, opts *
 	// is those that explicitly check gas remaining in order to execute within a
 	// given limit, but we probably don't want to return the lowest possible gas
 	// limit for these cases anyway.
-	lo = exr.UsedGas + ppr.UsedGas - 1
+	if ppr == nil {
+		lo = exr.UsedGas - 1
+	} else {
+		lo = exr.UsedGas + ppr.UsedGas - 1
+	}
 
 	// There's a fairly high chance for the transaction to execute successfully
 	// with gasLimit set to the first execution's usedGas + gasRefund. Explicitly
 	// check that gas amount and use as a limit for the binary search.
-	optimisticGasLimit := (exr.UsedGas + exr.RefundedGas + ppr.UsedGas + ppr.RefundedGas + params.CallStipend) * 64 / 63
+	var optimisticGasLimit uint64
+	if ppr == nil {
+		optimisticGasLimit = (exr.UsedGas + exr.RefundedGas + params.CallStipend) * 64 / 63
+	} else {
+		optimisticGasLimit = (exr.UsedGas + exr.RefundedGas + ppr.UsedGas + ppr.RefundedGas + params.CallStipend) * 64 / 63
+	}
 	if optimisticGasLimit < hi {
 		failed, _, _, err = executeRip7560Execution(ctx, tx, opts, optimisticGasLimit)
 		if err != nil {
