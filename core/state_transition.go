@@ -67,14 +67,22 @@ func (result *ExecutionResult) Revert() []byte {
 }
 
 // IntrinsicGas computes the 'intrinsic gas' for a message with the given data.
-func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028, isEIP3860 bool, isRIP7560InnerFrame ...bool) (uint64, error) {
+func IntrinsicGas(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028, isEIP3860 bool) (uint64, error) {
+	return IntrinsicGasWithOption(data, accessList, isContractCreation, isHomestead, isEIP2028, isEIP3860, false)
+}
+
+// IntrinsicGas computes the 'intrinsic gas' for a message with the given data.
+func IntrinsicGasWithOption(data []byte, accessList types.AccessList, isContractCreation bool, isHomestead, isEIP2028, isEIP3860 bool, calRIP7560 bool, isRIP7560InnerFrame ...bool) (uint64, error) {
 	if isRIP7560InnerFrame != nil && len(isRIP7560InnerFrame) > 0 && isRIP7560InnerFrame[0] {
 		return 0, nil
 	}
 	// Set the starting gas for the raw transaction
 	var gas uint64
+
 	if isContractCreation && isHomestead {
 		gas = params.TxGasContractCreation
+	} else if calRIP7560 {
+		gas = 0
 	} else {
 		gas = params.TxGas
 	}
@@ -480,7 +488,7 @@ func (st *StateTransition) innerTransitionDb() (*ExecutionResult, error) {
 	)
 
 	// Check clauses 4-5, subtract intrinsic gas if everything is correct
-	gas, err := IntrinsicGas(msg.Data, msg.AccessList, contractCreation, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, msg.IsRip7560Frame)
+	gas, err := IntrinsicGasWithOption(msg.Data, msg.AccessList, contractCreation, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, false, msg.IsRip7560Frame)
 	if err != nil {
 		return nil, err
 	}
