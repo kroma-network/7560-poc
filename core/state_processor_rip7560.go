@@ -85,12 +85,14 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
 		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
 		if err != nil {
+			log.Warn("Failed to BuyGasRip7560Transaction", "err", err)
 			// TODO : do we have to drop bundle?
 			continue
 		}
 		var vpr *ValidationPhaseResult
 		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
+			log.Warn("Failed to ApplyRip7560ValidationPhases", "err", err)
 			// If an error occurs in the validation phase, invalidate the transaction
 			statedb.RevertToSnapshot(snapshot)
 			gp.SetGas(prevGas)
