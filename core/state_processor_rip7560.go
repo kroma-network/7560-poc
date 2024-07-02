@@ -239,7 +239,8 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		} else if deployedAddr != *tx.Rip7560TransactionData().Sender {
 			return nil, errors.New("deployed address mismatch - invalid transaction")
 		}
-		deploymentUsedGas = resultDeployer.UsedGas
+		// TODO : would be handled inside IntrinsicGas
+		deploymentUsedGas = resultDeployer.UsedGas + params.TxGasContractCreation
 	}
 
 	/*** Account Validation Frame ***/
@@ -366,7 +367,7 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	// calculation for intrinsicGas
 	// TODO: integrated with code in state_transition
 	rules := evm.ChainConfig().Rules(evm.Context.BlockNumber, evm.Context.Random != nil, evm.Context.Time)
-	intrGas, err := IntrinsicGas(vpr.Tx.Data(), vpr.Tx.AccessList(), false, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, false)
+	intrGas, err := IntrinsicGasWithOption(vpr.Tx.Data(), vpr.Tx.AccessList(), false, rules.IsHomestead, rules.IsIstanbul, rules.IsShanghai, true, false)
 	if err != nil {
 		return nil, nil, 0, err
 	}
