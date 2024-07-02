@@ -29,6 +29,7 @@ func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args
 	if len(args) == 0 {
 		return common.Hash{}, errors.New("submitted bundle has zero length")
 	}
+	log.Info("[RIP-7560] SendRip7560TransactionsBundle", "bundlerId", bundlerId)
 	txs := make([]*types.Transaction, len(args))
 	for i := 0; i < len(args); i++ {
 		txs[i] = args[i].ToTransaction()
