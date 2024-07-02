@@ -665,7 +665,7 @@ func (tx *Transaction) Hash() common.Hash {
 		h = rlpHash(tx.inner)
 	} else if tx.Type() == Rip7560BundleHeaderType {
 		rlpHash := rlpHash(tx.Rip7560BundleHeaderTransactionData())
-		h = crypto.Keccak256Hash(append([]byte{Rip7560Type, ScaTransactionSubtype}, rlpHash[:]...))
+		h = crypto.Keccak256Hash(append([]byte{Rip7560BundleHeaderType, ScaTransactionSubtype}, rlpHash[:]...))
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}
