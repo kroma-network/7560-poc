@@ -170,7 +170,7 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		{Name: "nonce", Type: "uint256"},
 		{Name: "validationGasLimit", Type: "uint256"},
 		{Name: "paymasterGasLimit", Type: "uint256"},
-		{Name: "postOpGas", Type: "uint256"},
+		{Name: "postOpGasLimit", Type: "uint256"},
 		{Name: "callGasLimit", Type: "uint256"},
 		{Name: "maxFeePerGas", Type: "uint256"},
 		{Name: "maxPriorityFeePerGas", Type: "uint256"},
