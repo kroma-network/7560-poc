@@ -492,7 +492,7 @@ func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *par
 		return nil, err
 	}
 	txAbiEncoding, err := tx.AbiEncode()
-	validateTransactionData, err := validateTransactionAbi.Pack("validateTransaction", big.NewInt(0), signingHash, txAbiEncoding)
+	validateTransactionData, err := validateTransactionAbi.Pack("validateTransaction", big.NewInt(1), signingHash, txAbiEncoding)
 	return &Message{
 		From:              chainConfig.EntryPointAddress,
 		To:                tx.Sender,
@@ -520,7 +520,7 @@ func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params
 
 	validateTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
 	txAbiEncoding, err := tx.AbiEncode()
-	data, err := validateTransactionAbi.Pack("validatePaymasterTransaction", big.NewInt(0), signingHash, txAbiEncoding)
+	data, err := validateTransactionAbi.Pack("validatePaymasterTransaction", big.NewInt(1), signingHash, txAbiEncoding)
 
 	if err != nil {
 		return nil, err
