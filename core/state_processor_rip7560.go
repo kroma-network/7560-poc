@@ -386,8 +386,8 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if paymasterPostOpResult != nil {
 		cumulativeGasUsed +=
 			paymasterPostOpResult.UsedGas
+		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
 	}
-	log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
 
 	// calculation for intrinsicGas
 	// TODO: integrated with code in state_transition
