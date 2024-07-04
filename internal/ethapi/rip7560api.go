@@ -113,6 +113,9 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 		GasPrice: tx.GasPrice(),
 	}
 	evm := vm.NewEVM(blockContext, txContext, state, chainConfig, vm.Config{NoBaseFee: true})
+
+	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
+	signingHash := signer.Hash(tx)
 	// Wait for the context to be done and cancel the evm. Even if the
 	// EVM has finished, cancelling may be done (repeatedly)
 	go func() {
@@ -127,7 +130,7 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 		return nil, err
 	}
 
-	result, err := core.ApplyRip7560ValidationPhases(chainConfig, bc, &header.Coinbase, gp, state, header, tx, evm.Config)
+	result, err := core.ApplyRip7560ValidationPhases(chainConfig, bc, &header.Coinbase, gp, state, header, tx, evm.Config, signingHash)
 	if err := state.Error(); err != nil {
 		return nil, err
 	}

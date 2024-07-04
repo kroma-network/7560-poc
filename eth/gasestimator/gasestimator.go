@@ -240,11 +240,11 @@ func run(ctx context.Context, call *core.Message, opts *Options) (*core.Executio
 	return result, nil
 }
 
-func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *Options, gasLimit uint64) (*core.ValidationPhaseResult, *state.StateDB, error) {
+func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *Options, gasLimit uint64, signingHash common.Hash) (*core.ValidationPhaseResult, *state.StateDB, error) {
 	st := tx.Rip7560TransactionData()
 	// Configure the call for this specific execution (and revert the change after)
-	defer func(gas uint64) { st.Gas = gas }(st.Gas)
-	st.Gas = gasLimit
+	defer func(gas uint64) { st.ValidationGas = gas }(st.ValidationGas)
+	st.ValidationGas = gasLimit
 
 	// Execute the call and separate execution faults caused by a lack of gas or
 	// other non-fixable conditions
@@ -268,7 +268,7 @@ func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *
 	}()
 
 	// Gas Pool is set to half of the maximum possible gas to prevent overflow
-	vpr, err := core.ApplyRip7560ValidationPhases(opts.Config, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, tx, evm.Config)
+	vpr, err := core.ApplyRip7560ValidationPhases(opts.Config, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, tx, evm.Config, signingHash)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -283,6 +283,9 @@ func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *
 }
 
 func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts *Options, gasCap uint64) (uint64, error) {
+	// First calculate the tx hash
+	signer := types.MakeSigner(opts.Config, opts.Header.Number, opts.Header.Time)
+	signingHash := signer.Hash(tx)
 	// Binary search the gas limit, as it may need to be higher than the amount used
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.ValidationGas + st.PaymasterGas + params.Tx7560BaseGas
@@ -329,7 +332,7 @@ func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts 
 
 	// We first execute the transaction at the highest allowable gas limit, since if this fails we
 	// can return error immediately.
-	vpr, statedb, err := executeRip7560Validation(ctx, tx, opts, hi)
+	vpr, statedb, err := executeRip7560Validation(ctx, tx, opts, hi, signingHash)
 	if err != nil {
 		return 0, err
 	} else if vpr == nil && err == nil {
@@ -348,7 +351,7 @@ func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts 
 	// check that gas amount and use as a limit for the binary search.
 	optimisticGasLimit := (vpUsedGas + params.CallStipend) * 64 / 63
 	if optimisticGasLimit < hi {
-		vpr, statedb, err = executeRip7560Validation(ctx, tx, opts, optimisticGasLimit)
+		vpr, statedb, err = executeRip7560Validation(ctx, tx, opts, optimisticGasLimit, signingHash)
 		if err != nil {
 			// This should not happen under normal conditions since if we make it this far the
 			// transaction had run without error at least once before.
@@ -379,7 +382,7 @@ func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts 
 			// range here is skewed to favor the low side.
 			mid = lo * 2
 		}
-		vpr, statedb, err = executeRip7560Validation(ctx, tx, opts, mid)
+		vpr, statedb, err = executeRip7560Validation(ctx, tx, opts, mid, signingHash)
 		if err != nil {
 			// This should not happen under normal conditions since if we make it this far the
 			// transaction had run without error at least once before.
