@@ -122,7 +122,10 @@ func (api *Rip7560API) traceTx(ctx context.Context, tx *types.Transaction, txctx
 	statedb.SetTxContext(txctx.TxHash, txctx.TxIndex)
 	gp := new(core.GasPool).AddGas(10000000)
 
-	_, err = core.ApplyRip7560ValidationPhases(api.backend.ChainConfig(), api.chainContext(ctx), nil, gp, statedb, block.Header(), tx, vmenv.Config)
+	signer := types.MakeSigner(api.backend.ChainConfig(), block.Header().Number, block.Header().Time)
+	signingHash := signer.Hash(tx)
+
+	_, err = core.ApplyRip7560ValidationPhases(api.backend.ChainConfig(), api.chainContext(ctx), nil, gp, statedb, block.Header(), tx, vmenv.Config, signingHash)
 	if err != nil {
 		return nil, fmt.Errorf("tracing failed: %w", err)
 	}
