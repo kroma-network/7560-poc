@@ -387,7 +387,6 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if paymasterPostOpResult != nil {
 		cumulativeGasUsed +=
 			paymasterPostOpResult.UsedGas
-		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
 	}
 
 	// calculation for intrinsicGas
@@ -398,7 +397,6 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 		return nil, nil, 0, err
 	}
 	cumulativeGasUsed += intrGas
-	log.Info("[RIP-7560] Execution gas info", "intrGas", intrGas)
 
 	// apply a penalty && refund gas
 	// TODO: If this value is not persistent, it should be modified to be managed on-chain config
@@ -407,7 +405,6 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	cumulativeGasUsed += gasPenalty
 	statedb.AddBalance(*payment, uint256.NewInt((prepaidGas.Uint64()-cumulativeGasUsed)*evm.Context.BaseFee.Uint64()))
 	gp.AddGas(prepaidGas.Uint64() - cumulativeGasUsed)
-	log.Info("[RIP-7560] Execution gas info", "gasPenalty", gasPenalty)
 
 	// payments for rollup gas expenses to recipients
 	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(cumulativeGasUsed), evm.Context.BaseFee)
@@ -415,7 +412,6 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if overflow {
 		return nil, nil, 0, fmt.Errorf("optimism gas cost overflows U256: %d", gasCost)
 	}
-	log.Info("[RIP-7560] Execution gas info", "BaseFee", amtU256)
 	statedb.AddBalance(params.OptimismBaseFeeRecipient, amtU256)
 	if l1Cost := evm.Context.L1CostFunc(vpr.Tx.RollupCostData(), evm.Context.Time); l1Cost != nil {
 		amtU256, overflow = uint256.FromBig(l1Cost)
@@ -423,8 +419,10 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 			return nil, nil, 0, fmt.Errorf("optimism l1 cost overflows U256: %d", l1Cost)
 		}
 		statedb.AddBalance(params.OptimismL1FeeRecipient, amtU256)
-		log.Info("[RIP-7560] Execution gas info", "L1Fee", amtU256)
 	}
+
+	log.Info("[RIP-7560] Execution gas info", "vpr.NonceValidationUsedGas", vpr.NonceValidationUsedGas, "vpr.ValidationUsedGas", vpr.ValidationUsedGas, "vpr.DeploymentUsedGas", vpr.DeploymentUsedGas, "vpr.PmValidationUsedGas", vpr.PmValidationUsedGas, "executionResult.UsedGas", executionResult.UsedGas, "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas, "IntrinsicGas", intrGas, "gasPenalty", gasPenalty)
+	log.Info("[RIP-7560] Execution gas info", "cumulativeGasUsed", cumulativeGasUsed)
 
 	return executionResult, paymasterPostOpResult, cumulativeGasUsed, nil
 }
