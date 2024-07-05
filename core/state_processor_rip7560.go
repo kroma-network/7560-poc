@@ -401,7 +401,8 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	// apply a penalty && refund gas
 	// TODO: If this value is not persistent, it should be modified to be managed on-chain config
 	const UNUSED_GAS_PENALTY_PERCENT = 10
-	gasPenalty := (prepaidGas.Uint64() - cumulativeGasUsed) * UNUSED_GAS_PENALTY_PERCENT / 100
+	//gasPenalty := (prepaidGas.Uint64() - cumulativeGasUsed) * UNUSED_GAS_PENALTY_PERCENT / 100
+	var gasPenalty uint64 = 0
 	cumulativeGasUsed += gasPenalty
 	statedb.AddBalance(*payment, uint256.NewInt((prepaidGas.Uint64()-cumulativeGasUsed)*evm.Context.BaseFee.Uint64()))
 	gp.AddGas(prepaidGas.Uint64() - cumulativeGasUsed)
