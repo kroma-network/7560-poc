@@ -43,4 +43,5 @@ echo "
 --metrics
 --metrics.addr=0.0.0.0
 --metrics.port=36060
+--miner.recommit=1s
 " | pbcopy
