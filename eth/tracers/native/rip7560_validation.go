@@ -10,7 +10,6 @@ import (
 	"github.com/holiman/uint256"
 	"math/big"
 	"regexp"
-	"strconv"
 	"sync/atomic"
 )
 
@@ -210,9 +209,15 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 	switch op {
 	case vm.REVERT, vm.RETURN:
 		if depth == 0 {
-			offset := int(stackData[stackSize-1].Uint64())
-			length := int(stackData[stackSize-2].Uint64())
-			data := scope.Memory.Data()[offset : offset+length][:4000]
+			mStart := stackData[len(stackData)-1]
+			mSize := stackData[len(stackData)-2]
+			data, err := tracers.GetMemoryCopyPadded(scope.Memory, int64(mStart.Uint64()), int64(mSize.Uint64()))
+			if err != nil {
+				return
+			}
+			if len(data) >= 4000 {
+				data = data[:4000]
+			}
 			t.calls = append(t.calls, callFrame{
 				Type:    op,
 				GasUsed: 0,
@@ -246,23 +251,32 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 			t.countSlot(access.Writes, slot)
 		}
 	case vm.KECCAK256:
-		offset := int(stackData[stackSize-1].Uint64())
-		length := int(stackData[stackSize-2].Uint64())
-		if length > 20 && length < 512 {
-			t.keccak = append(t.keccak, hexutil.Encode(scope.Memory.Data()[offset:offset+length]))
+		mStart := stackData[len(stackData)-1]
+		mSize := stackData[len(stackData)-2]
+		if mStart.Uint64() > 20 && mSize.Uint64() < 512 {
+			data, err := tracers.GetMemoryCopyPadded(scope.Memory, int64(mStart.Uint64()), int64(mSize.Uint64()))
+			if err != nil {
+				return
+			}
+			t.keccak = append(t.keccak, hexutil.Encode(data))
 		}
 	case vm.LOG0, vm.LOG1, vm.LOG2, vm.LOG3, vm.LOG4:
-		count, _ := strconv.Atoi(op.String()[3:])
-		offset := int(stackData[stackSize-count-1].Uint64())
-		length := int(stackData[stackSize-count-2].Uint64())
-		tpcs := []common.Hash{}
-		for i := 0; i < count; i++ {
-			tpcs = append(tpcs, common.BytesToHash(stackData[stackSize-i-1].Bytes()))
+		size := int(op - vm.LOG0)
+		mStart := stackData[len(stackData)-1]
+		mSize := stackData[len(stackData)-2]
+		topics := make([]common.Hash, size)
+		for i := 0; i < size; i++ {
+			topic := stackData[len(stackData)-2-(i+1)]
+			topics[i] = topic.Bytes32()
 		}
-		data := scope.Memory.Data()[offset : offset+length]
+
+		data, err := tracers.GetMemoryCopyPadded(scope.Memory, int64(mStart.Uint64()), int64(mSize.Uint64()))
+		if err != nil {
+			return
+		}
 		t.logs = append(t.logs, callLog{
-			Topics: tpcs,
-			Data:   hexutil.Bytes(data),
+			Topics: topics,
+			Data:   data,
 		})
 	}
 }
