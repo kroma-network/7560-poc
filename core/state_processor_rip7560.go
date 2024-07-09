@@ -243,6 +243,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 			return nil, err
 		}
 		deployedAddr := common.BytesToAddress(resultDeployer.ReturnData)
+		log.Info("[RIP-7560]", "deployedAddr", deployedAddr.Hex())
 		if resultDeployer.Failed() || statedb.GetCode(deployedAddr) == nil {
 			// TODO: bubble up the inner error message to the user, if possible
 			return nil, errors.New("account deployment failed - invalid transaction")
@@ -422,7 +423,10 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 		statedb.AddBalance(params.OptimismL1FeeRecipient, amtU256)
 	}
 
-	log.Info("[RIP-7560] Execution gas info", "vpr.NonceValidationUsedGas", vpr.NonceValidationUsedGas, "vpr.ValidationUsedGas", vpr.ValidationUsedGas, "vpr.DeploymentUsedGas", vpr.DeploymentUsedGas, "vpr.PmValidationUsedGas", vpr.PmValidationUsedGas, "executionResult.UsedGas", executionResult.UsedGas, "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas, "IntrinsicGas", intrGas, "gasPenalty", gasPenalty)
+	log.Info("[RIP-7560] Execution gas info", "vpr.NonceValidationUsedGas", vpr.NonceValidationUsedGas, "vpr.ValidationUsedGas", vpr.ValidationUsedGas, "vpr.DeploymentUsedGas", vpr.DeploymentUsedGas, "vpr.PmValidationUsedGas", vpr.PmValidationUsedGas, "executionResult.UsedGas", executionResult.UsedGas, "IntrinsicGas", intrGas, "gasPenalty", gasPenalty)
+	if paymasterPostOpResult != nil {
+		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
+	}
 	log.Info("[RIP-7560] Execution gas info", "cumulativeGasUsed", cumulativeGasUsed)
 
 	return executionResult, paymasterPostOpResult, cumulativeGasUsed, nil
