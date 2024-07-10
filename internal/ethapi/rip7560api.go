@@ -32,7 +32,7 @@ func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args
 	log.Info("[RIP-7560] SendRip7560TransactionsBundle", "bundlerId", bundlerId)
 	txs := make([]*types.Transaction, len(args))
 	for i := 0; i < len(args); i++ {
-		txs[i] = args[i].ToTransaction()
+		txs[i] = args[i].toTransaction()
 	}
 	bundle := &types.ExternallyReceivedBundle{
 		BundlerId:       bundlerId,
@@ -100,7 +100,7 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 	defer cancel()
 
 	// Get a new instance of the EVM.
-	tx := args.ToTransaction()
+	tx := args.toTransaction()
 
 	chainConfig := b.ChainConfig()
 	bc := NewChainContext(ctx, b)
@@ -169,7 +169,7 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 	// Construct the gas estimator option from the user input
 	chainConfig := b.ChainConfig()
 	bc := NewChainContext(ctx, b)
-	tx := args.ToTransaction()
+	tx := args.toTransaction()
 
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 	payment, prepaidGas, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
