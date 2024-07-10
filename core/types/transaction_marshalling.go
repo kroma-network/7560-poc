@@ -19,13 +19,15 @@ package types
 import (
 	"encoding/json"
 	"errors"
+	"io"
+	"math/big"
+
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
 	"github.com/ethereum/go-ethereum/log"
+	"github.com/ethereum/go-ethereum/crypto/kzg4844"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
-	"io"
-	"math/big"
 )
 
 // txJSON is the JSON representation of transactions.
@@ -54,6 +56,11 @@ type txJSON struct {
 	From       *common.Address `json:"from,omitempty"`
 	Mint       *hexutil.Big    `json:"mint,omitempty"`
 	IsSystemTx *bool           `json:"isSystemTx,omitempty"`
+
+	// Blob transaction sidecar encoding:
+	Blobs       []kzg4844.Blob       `json:"blobs,omitempty"`
+	Commitments []kzg4844.Commitment `json:"commitments,omitempty"`
+	Proofs      []kzg4844.Proof      `json:"proofs,omitempty"`
 
 	// RIP 7560 transaction fileds
 	SubType       *hexutil.Uint64 `json:"subType,omitempty"`
@@ -169,6 +176,12 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.S = (*hexutil.Big)(itx.S.ToBig())
 		yparity := itx.V.Uint64()
 		enc.YParity = (*hexutil.Uint64)(&yparity)
+		if sidecar := itx.Sidecar; sidecar != nil {
+			enc.Blobs = itx.Sidecar.Blobs
+			enc.Commitments = itx.Sidecar.Commitments
+			enc.Proofs = itx.Sidecar.Proofs
+		}
+
 	case *DepositTx:
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
 		enc.Value = (*hexutil.Big)(itx.Value)
