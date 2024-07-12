@@ -43,6 +43,9 @@ fi
   --metrics.addr=0.0.0.0 \
   --metrics.port=36060 \
   --miner.recommit=1s \
+  --override.canyon=0 \
+  --override.ecotone=1721026803 \
+  --override.fjord=1721026805 \
   --log.maxsize=100 \
   --log.rotate \
   --log.format=logfmt \
