@@ -191,7 +191,7 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 		return nil, err
 	}
 
-	eg, _, err := gasestimator.EstimateRip7560Execution(ctx, tx, opts, gasCap)
+	eg, _, err := gasestimator.EstimateRip7560Execution(ctx, opts, gasCap)
 	if err != nil {
 		return nil, err
 	}

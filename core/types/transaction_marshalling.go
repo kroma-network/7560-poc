@@ -24,8 +24,8 @@ import (
 
 	"github.com/ethereum/go-ethereum/common"
 	"github.com/ethereum/go-ethereum/common/hexutil"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/crypto/kzg4844"
+	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/holiman/uint256"
 )
@@ -66,7 +66,9 @@ type txJSON struct {
 	SubType       *hexutil.Uint64 `json:"subType,omitempty"`
 	Sender        *common.Address `json:"sender,omitempty"`
 	Signature     *hexutil.Bytes  `json:"signature,omitempty"`
+	Paymaster     *common.Address `json:"paymaster,omitempty"`
 	PaymasterData *hexutil.Bytes  `json:"paymasterData,omitempty"`
+	Deployer      *common.Address `json:"deployer,omitempty"`
 	DeployerData  *hexutil.Bytes  `json:"deployerData,omitempty"`
 	BuilderFee    *hexutil.Big    `json:"builderFee,omitempty"`
 	ValidationGas *hexutil.Uint64 `json:"validationGas,omitempty"`
@@ -197,7 +199,6 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 
 	case *Rip7560AccountAbstractionTx:
 		log.Info("Marshal Rip7560Type JSON")
-		enc.SubType = (*hexutil.Uint64)(&itx.Subtype)
 		enc.ChainID = (*hexutil.Big)(itx.ChainID)
 		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap)
 		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap)
@@ -206,7 +207,9 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.AccessList = &itx.AccessList
 		enc.Sender = itx.Sender
 		enc.Signature = (*hexutil.Bytes)(&itx.Signature)
+		enc.Paymaster = itx.Paymaster
 		enc.PaymasterData = (*hexutil.Bytes)(&itx.PaymasterData)
+		enc.Deployer = itx.Deployer
 		enc.DeployerData = (*hexutil.Bytes)(&itx.DeployerData)
 		enc.BuilderFee = (*hexutil.Big)(itx.BuilderFee)
 		enc.ValidationGas = (*hexutil.Uint64)(&itx.ValidationGas)
@@ -530,10 +533,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		var itx Rip7560AccountAbstractionTx
 		inner = &itx
 
-		if dec.SubType == nil {
-			return errors.New("missing required field 'subType' for txdata")
-		}
-		itx.Subtype = uint64(*dec.SubType)
 		if dec.ChainID == nil {
 			return errors.New("missing required field 'chainId' in transaction")
 		}
@@ -565,8 +564,14 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'signature' in transaction")
 		}
 		itx.Signature = *dec.Signature
+		if dec.Paymaster != nil {
+			itx.Paymaster = dec.Paymaster
+		}
 		if dec.PaymasterData != nil {
 			itx.PaymasterData = *dec.PaymasterData
+		}
+		if dec.Deployer != nil {
+			itx.Deployer = dec.Deployer
 		}
 		if dec.DeployerData != nil {
 			itx.DeployerData = *dec.DeployerData

@@ -76,15 +76,16 @@ type TransactionArgs struct {
 	blobSidecarAllowed bool
 
 	// Introduced by RIP-7560 Transaction
-	Subtype       *hexutil.Uint64 `json:"subType"`
 	Sender        *common.Address `json:"sender"`
 	Signature     *hexutil.Bytes  `json:"signature"`
-	PaymasterData *hexutil.Bytes  `json:"paymasterData"`
-	DeployerData  *hexutil.Bytes  `json:"deployerData"`
-	BuilderFee    *hexutil.Big    `json:"builderFee"`
-	ValidationGas *hexutil.Uint64 `json:"validationGas"`
-	PaymasterGas  *hexutil.Uint64 `json:"paymasterGas"`
-	PostOpGas     *hexutil.Uint64 `json:"postOpGas"`
+	Paymaster     *common.Address `json:"paymaster,omitempty"`
+	PaymasterData *hexutil.Bytes  `json:"paymasterData,omitempty"`
+	Deployer      *common.Address `json:"deployer,omitempty"`
+	DeployerData  *hexutil.Bytes  `json:"deployerData,omitempty"`
+	BuilderFee    *hexutil.Big
+	ValidationGas *hexutil.Uint64 `json:"verificationGasLimit"`
+	PaymasterGas  *hexutil.Uint64 `json:"paymasterVerificationGasLimit"`
+	PostOpGas     *hexutil.Uint64 `json:"paymasterPostOpGasLimit"`
 	BigNonce      *hexutil.Big    `json:"bigNonce"`
 }
 
@@ -107,9 +108,23 @@ func (args *TransactionArgs) data() []byte {
 	return nil
 }
 
+func (args *TransactionArgs) sender() *common.Address {
+	if args.Sender != nil {
+		return args.Sender
+	}
+	return nil
+}
+
 func (args *TransactionArgs) signature() []byte {
 	if args.Signature != nil {
 		return *args.Signature
+	}
+	return nil
+}
+
+func (args *TransactionArgs) paymaster() *common.Address {
+	if args.Paymaster != nil {
+		return args.Paymaster
 	}
 	return nil
 }
@@ -140,6 +155,13 @@ func (args *TransactionArgs) postOpGas() uint64 {
 		return uint64(*args.PostOpGas)
 	}
 	return 0
+}
+
+func (args *TransactionArgs) deployer() *common.Address {
+	if args.Deployer != nil {
+		return args.Deployer
+	}
+	return nil
 }
 
 func (args *TransactionArgs) deployerData() []byte {
@@ -519,7 +541,6 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			al = *args.AccessList
 		}
 		aatx := types.Rip7560AccountAbstractionTx{
-			Subtype:    uint64(*args.Subtype),
 			To:         &common.Address{},
 			ChainID:    (*big.Int)(args.ChainID),
 			Gas:        uint64(*args.Gas),
@@ -531,7 +552,9 @@ func (args *TransactionArgs) toTransaction() *types.Transaction {
 			// RIP-7560 parameters
 			Sender:        args.Sender,
 			Signature:     args.signature(),
+			Paymaster:     args.paymaster(),
 			PaymasterData: args.paymasterData(),
+			Deployer:      args.deployer(),
 			DeployerData:  args.deployerData(),
 			BuilderFee:    (*big.Int)(args.BuilderFee),
 			ValidationGas: args.validationGas(),
