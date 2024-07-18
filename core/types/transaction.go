@@ -368,14 +368,6 @@ func (tx *Transaction) IsSystemTx() bool {
 }
 
 // RIP-7560 support
-func (tx *Transaction) SubType() uint64 {
-	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
-		return dep.Subtype
-	}
-	// TODO : handle case
-	return 0
-}
-
 func (tx *Transaction) Sender() *common.Address {
 	if dep, ok := tx.inner.(*Rip7560AccountAbstractionTx); ok {
 		return dep.Sender
@@ -665,7 +657,7 @@ func (tx *Transaction) Hash() common.Hash {
 		h = rlpHash(tx.inner)
 	} else if tx.Type() == Rip7560BundleHeaderType {
 		rlpHash := rlpHash(tx.Rip7560BundleHeaderTransactionData())
-		h = crypto.Keccak256Hash(append([]byte{Rip7560BundleHeaderType, ScaTransactionSubtype}, rlpHash[:]...))
+		h = crypto.Keccak256Hash(append([]byte{Rip7560BundleHeaderType}, rlpHash[:]...))
 	} else {
 		h = prefixedRlpHash(tx.Type(), tx.inner)
 	}

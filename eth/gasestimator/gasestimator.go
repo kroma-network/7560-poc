@@ -304,10 +304,10 @@ func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts 
 	// Recap the highest gas limit with account's available balance.
 	if feeCap.BitLen() != 0 {
 		var payment common.Address
-		if len(st.PaymasterData) < 20 {
+		if st.Paymaster == nil {
 			payment = *st.Sender
 		} else {
-			payment = common.BytesToAddress(st.PaymasterData[:20])
+			payment = *st.Paymaster
 		}
 		balance := opts.State.GetBalance(payment).ToBig()
 
@@ -436,8 +436,9 @@ func executeRip7560Execution(ctx context.Context, tx *types.Transaction, opts *O
 	return false, exr, ppr, nil
 }
 
-func EstimateRip7560Execution(ctx context.Context, tx *types.Transaction, opts *Options, gasCap uint64) (uint64, []byte, error) {
+func EstimateRip7560Execution(ctx context.Context, opts *Options, gasCap uint64) (uint64, []byte, error) {
 	// Binary search the gas limit, as it may need to be higher than the amount used
+	tx := opts.ValidationPhaseResult.Tx
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.Gas + st.PostOpGas
 	var (
@@ -459,10 +460,10 @@ func EstimateRip7560Execution(ctx context.Context, tx *types.Transaction, opts *
 	// Recap the highest gas limit with account's available balance.
 	if feeCap.BitLen() != 0 {
 		var payment common.Address
-		if len(st.PaymasterData) < 20 {
+		if st.Paymaster == nil {
 			payment = *st.Sender
 		} else {
-			payment = common.BytesToAddress(st.PaymasterData[:20])
+			payment = *st.Paymaster
 		}
 		balance := opts.State.GetBalance(payment).ToBig()
 

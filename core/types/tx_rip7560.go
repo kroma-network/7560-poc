@@ -24,8 +24,6 @@ import (
 	"math/big"
 )
 
-const ScaTransactionSubtype = 0x01
-
 // Rip7560AccountAbstractionTx represents an RIP-7560 transaction.
 type Rip7560AccountAbstractionTx struct {
 	// overlapping fields
@@ -37,10 +35,11 @@ type Rip7560AccountAbstractionTx struct {
 	AccessList AccessList
 
 	// extra fields
-	Subtype       uint64
 	Sender        *common.Address
 	Signature     []byte
+	Paymaster     *common.Address `rlp:"nil"`
 	PaymasterData []byte
+	Deployer      *common.Address `rlp:"nil"`
 	DeployerData  []byte
 	BuilderFee    *big.Int
 	ValidationGas uint64
@@ -49,7 +48,7 @@ type Rip7560AccountAbstractionTx struct {
 	BigNonce      *big.Int
 
 	// removed fields
-	To    *common.Address
+	To    *common.Address `rlp:"nil"`
 	Nonce uint64
 	Value *big.Int
 }
@@ -59,10 +58,9 @@ func (tx *Rip7560AccountAbstractionTx) isSystemTx() bool { return false }
 // copy creates a deep copy of the transaction data and initializes all fields.
 func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 	cpy := &Rip7560AccountAbstractionTx{
-		Subtype: tx.Subtype,
-		To:      copyAddressPtr(tx.To),
-		Data:    common.CopyBytes(tx.Data),
-		Gas:     tx.Gas,
+		To:   copyAddressPtr(tx.To),
+		Data: common.CopyBytes(tx.Data),
+		Gas:  tx.Gas,
 		// These are copied below.
 		AccessList: make(AccessList, len(tx.AccessList)),
 		Value:      new(big.Int),
@@ -73,7 +71,9 @@ func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 
 		Sender:        copyAddressPtr(tx.Sender),
 		Signature:     common.CopyBytes(tx.Signature),
+		Paymaster:     copyAddressPtr(tx.Paymaster),
 		PaymasterData: common.CopyBytes(tx.PaymasterData),
+		Deployer:      copyAddressPtr(tx.Deployer),
 		DeployerData:  common.CopyBytes(tx.DeployerData),
 		BuilderFee:    new(big.Int),
 		ValidationGas: tx.ValidationGas,
@@ -136,16 +136,10 @@ func (tx *Rip7560AccountAbstractionTx) setSignatureValues(chainID, v, r, s *big.
 }
 
 // encode the subtype byte and the payload-bearing bytes of the RIP-7560 transaction
-func (tx *Rip7560AccountAbstractionTx) encode(b *bytes.Buffer) error {
-	b.WriteByte(ScaTransactionSubtype)
-	return rlp.Encode(b, tx)
-}
+func (tx *Rip7560AccountAbstractionTx) encode(b *bytes.Buffer) error { return rlp.Encode(b, tx) }
 
 // decode the payload-bearing bytes of the encoded RIP-7560 transaction payload
-func (tx *Rip7560AccountAbstractionTx) decode(input []byte) error {
-	tx.Subtype = ScaTransactionSubtype
-	return rlp.DecodeBytes(input[1:], tx)
-}
+func (tx *Rip7560AccountAbstractionTx) decode(input []byte) error { return rlp.DecodeBytes(input, tx) }
 
 // Rip7560Transaction an equivalent of a solidity struct only used to encode the 'transaction' parameter
 type Rip7560Transaction struct {
@@ -158,7 +152,9 @@ type Rip7560Transaction struct {
 	MaxFeePerGas         *big.Int
 	MaxPriorityFeePerGas *big.Int
 	BuilderFee           *big.Int
+	Paymaster            *common.Address
 	PaymasterData        []byte
+	Deployer             *common.Address
 	DeployerData         []byte
 	CallData             []byte
 	Signature            []byte
@@ -175,7 +171,9 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		{Name: "maxFeePerGas", Type: "uint256"},
 		{Name: "maxPriorityFeePerGas", Type: "uint256"},
 		{Name: "builderFee", Type: "uint256"},
+		{Name: "paymaster", Type: "address"},
 		{Name: "paymasterData", Type: "bytes"},
+		{Name: "deployer", Type: "address"},
 		{Name: "deployerData", Type: "bytes"},
 		{Name: "callData", Type: "bytes"},
 		{Name: "signature", Type: "bytes"},
@@ -184,6 +182,23 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 	args := abi.Arguments{
 		{Type: structThing, Name: "param_one"},
 	}
+	paymaster := tx.Paymaster
+	if tx.Paymaster == nil {
+		paymaster = &common.Address{}
+	}
+	paymasterData := tx.PaymasterData
+	if tx.PaymasterData == nil {
+		paymasterData = []byte{}
+	}
+	deployer := tx.Deployer
+	if tx.Deployer == nil {
+		deployer = &common.Address{}
+	}
+	deployerData := tx.DeployerData
+	if tx.DeployerData == nil {
+		deployerData = []byte{}
+	}
+
 	record := &Rip7560Transaction{
 		Sender:               *tx.Sender,
 		Nonce:                tx.BigNonce,
@@ -194,8 +209,10 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		MaxFeePerGas:         tx.GasFeeCap,
 		MaxPriorityFeePerGas: tx.GasTipCap,
 		BuilderFee:           tx.BuilderFee,
-		PaymasterData:        tx.PaymasterData,
-		DeployerData:         tx.DeployerData,
+		Paymaster:            paymaster,
+		PaymasterData:        paymasterData,
+		Deployer:             deployer,
+		DeployerData:         deployerData,
 		CallData:             tx.Data,
 		Signature:            tx.Signature,
 	}

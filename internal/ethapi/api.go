@@ -1460,7 +1460,6 @@ type RPCTransaction struct {
 	DepositReceiptVersion *hexutil.Uint64 `json:"depositReceiptVersion,omitempty"`
 
 	// RIP-7560-tx only
-	Subtype          hexutil.Uint64  `json:"subType,omitempty"`
 	Sender           *common.Address `json:"sender,omitempty"`
 	Signature        hexutil.Bytes   `json:"signature,omitempty"`
 	PaymasterData    hexutil.Bytes   `json:"paymasterData,omitempty"`
@@ -1573,7 +1572,6 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
 		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
 
-		result.Subtype = (hexutil.Uint64)(tx.SubType())
 		result.Sender = tx.Sender()
 		result.Signature = tx.Signature()
 		result.PaymasterData = tx.PaymasterData()
