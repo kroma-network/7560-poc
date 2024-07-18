@@ -268,7 +268,7 @@ func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *
 	}()
 
 	// Gas Pool is set to half of the maximum possible gas to prevent overflow
-	vpr, err := core.ApplyRip7560ValidationPhases(opts.Config, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, tx, evm.Config, signingHash)
+	vpr, err := core.ApplyRip7560ValidationPhases(opts.Config, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, tx, evm.Config, signingHash, true)
 	if err != nil {
 		if errors.Is(err, vm.ErrOutOfGas) {
 			return nil, nil, nil // Special case, raise gas limit

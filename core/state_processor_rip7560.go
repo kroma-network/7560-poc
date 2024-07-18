@@ -20,6 +20,10 @@ import (
 
 const MaxContextSize = 65536
 
+var MAGIC_VALUE_SENDER = [20]byte{0xbf, 0x45, 0xc1, 0x66}
+var MAGIC_VALUE_PAYMASTER = [20]byte{0xe0, 0xe6, 0x18, 0x3a}
+var MAGIC_VALUE_SIGFAIL = [20]byte{0x31, 0x66, 0x54, 0x94}
+
 type ValidationPhaseResult struct {
 	TxIndex                int
 	Tx                     *types.Transaction
@@ -190,7 +194,11 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	return &chargeFrom, mggas, nil
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, signingHash common.Hash) (*ValidationPhaseResult, error) {
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, signingHash common.Hash, estimate ...bool) (*ValidationPhaseResult, error) {
+	var estimateFlag = false
+	if len(estimate) > 0 && estimate[0] {
+		estimateFlag = estimate[0]
+	}
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := vm.TxContext{
 		Origin:   *tx.Rip7560TransactionData().Sender,
@@ -265,7 +273,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		log.Error("[RIP-7560] Account Validation Frame", "resultAccountValidation.Err", resultAccountValidation.Err)
 		return nil, resultAccountValidation.Err
 	}
-	validAfter, validUntil, err := validateAccountReturnData(resultAccountValidation.ReturnData)
+	validAfter, validUntil, err := validateAccountReturnData(resultAccountValidation.ReturnData, estimateFlag)
 	if err != nil {
 		log.Error("[RIP-7560] Account Validation Frame", "validateAccountReturnData.Err", err)
 		return nil, err
@@ -277,7 +285,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	}
 
 	/*** Paymaster Validation Frame ***/
-	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header)
+	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, estimateFlag)
 	if err != nil {
 		log.Error("[RIP-7560] Paymaster Validation Frame", "err", err)
 	}
@@ -299,7 +307,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	return vpr, nil
 }
 
-func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header) ([]byte, uint64, uint64, uint64, error) {
+func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.ChainConfig, signingHash common.Hash, evm *vm.EVM, gp *GasPool, statedb *state.StateDB, header *types.Header, estimateFlag bool) ([]byte, uint64, uint64, uint64, error) {
 	var pmValidationUsedGas uint64
 	var paymasterContext []byte
 	var pmValidAfter uint64
@@ -321,7 +329,7 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 			return nil, 0, 0, 0, errors.New("paymaster validation failed - invalid transaction")
 		}
 		pmValidationUsedGas = resultPm.UsedGas
-		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData)
+		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData, estimateFlag)
 		if err != nil {
 			log.Error("[RIP-7560] Paymaster Validation Frame", "validatePaymasterReturnData.err", err)
 			return nil, 0, 0, 0, err
@@ -594,13 +602,17 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 	}, nil
 }
 
-func validateAccountReturnData(data []byte) (uint64, uint64, error) {
-	var MAGIC_VALUE_SENDER = [20]byte{0xbf, 0x45, 0xc1, 0x66}
+func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, error) {
 	if len(data) != 32 {
 		return 0, 0, errors.New("invalid account return data length")
 	}
 	magicExpected := common.Bytes2Hex(data[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
+	if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
+	} else if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+		if !estimateFlag {
+			return 0, 0, errors.New("account return MAGIC_VALUE_SIGFAIL")
+		}
+	} else {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(data[4:12])
@@ -608,8 +620,7 @@ func validateAccountReturnData(data []byte) (uint64, uint64, error) {
 	return validAfter, validUntil, nil
 }
 
-func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
-	var MAGIC_VALUE_PAYMASTER = [20]byte{0xe0, 0xe6, 0x18, 0x3a}
+func validatePaymasterReturnData(data []byte, estimate bool) ([]byte, uint64, uint64, error) {
 	jsondata := `[
 		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
 	]`
@@ -632,7 +643,12 @@ func validatePaymasterReturnData(data []byte) ([]byte, uint64, uint64, error) {
 		return nil, 0, 0, errors.New("paymaster returned context size too large")
 	}
 	magicExpected := common.Bytes2Hex(validatePaymasterResult.ValidationData[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
+	if magicExpected == common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
+	} else if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+		if !estimate {
+			return nil, 0, 0, errors.New("paymaster return MAGIC_VALUE_SIGFAIL")
+		}
+	} else {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
