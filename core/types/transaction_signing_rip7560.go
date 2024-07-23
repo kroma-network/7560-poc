@@ -12,10 +12,13 @@ func NewRIP7560Signer(chainId *big.Int) Signer {
 }
 
 func (s rip7560Signer) Sender(tx *Transaction) (common.Address, error) {
-	if tx.Type() != Rip7560Type && tx.Type() != Rip7560BundleHeaderType {
+	if tx.Type() == Rip7560Type {
+		return *tx.Rip7560TransactionData().Sender, nil
+	} else if tx.Type() != Rip7560BundleHeaderType {
+		return [20]byte{}, nil
+	} else {
 		return s.londonSigner.Sender(tx)
 	}
-	return [20]byte{}, nil
 }
 
 // Hash returns the hash to be signed by the sender.

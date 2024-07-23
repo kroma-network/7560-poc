@@ -114,7 +114,7 @@ func (tx *Rip7560AccountAbstractionTx) gasPrice() *big.Int     { return tx.GasFe
 func (tx *Rip7560AccountAbstractionTx) value() *big.Int        { return tx.Value }
 func (tx *Rip7560AccountAbstractionTx) nonce() uint64          { return tx.Nonce }
 func (tx *Rip7560AccountAbstractionTx) bigNonce() *big.Int     { return tx.BigNonce }
-func (tx *Rip7560AccountAbstractionTx) to() *common.Address    { return tx.To }
+func (tx *Rip7560AccountAbstractionTx) to() *common.Address    { return nil }
 
 func (tx *Rip7560AccountAbstractionTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
 	if baseFee == nil {
