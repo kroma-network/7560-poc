@@ -607,12 +607,12 @@ func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, 
 		return 0, 0, errors.New("invalid account return data length")
 	}
 	magicExpected := common.Bytes2Hex(data[:20])
-	if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
-	} else if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
-		if !estimateFlag {
-			return 0, 0, errors.New("account return MAGIC_VALUE_SIGFAIL")
+	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
+		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+			if !estimateFlag {
+				return 0, 0, errors.New("account return MAGIC_VALUE_SIGFAIL")
+			}
 		}
-	} else {
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(data[4:12])
@@ -620,7 +620,7 @@ func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, 
 	return validAfter, validUntil, nil
 }
 
-func validatePaymasterReturnData(data []byte, estimate bool) ([]byte, uint64, uint64, error) {
+func validatePaymasterReturnData(data []byte, estimateFlag bool) ([]byte, uint64, uint64, error) {
 	jsondata := `[
 		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
 	]`
@@ -643,12 +643,12 @@ func validatePaymasterReturnData(data []byte, estimate bool) ([]byte, uint64, ui
 		return nil, 0, 0, errors.New("paymaster returned context size too large")
 	}
 	magicExpected := common.Bytes2Hex(validatePaymasterResult.ValidationData[:20])
-	if magicExpected == common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
-	} else if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
-		if !estimate {
-			return nil, 0, 0, errors.New("paymaster return MAGIC_VALUE_SIGFAIL")
+	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
+		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+			if !estimateFlag {
+				return nil, 0, 0, errors.New("paymaster return MAGIC_VALUE_SIGFAIL")
+			}
 		}
-	} else {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
 	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
