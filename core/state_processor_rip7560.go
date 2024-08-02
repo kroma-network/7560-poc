@@ -89,9 +89,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		statedb.SetTxContext(tx.Hash(), index+i)
 		var vpr *ValidationPhaseResult
 		log.Info("[RIP-7560] Validation Phase - Validation")
-		signer := types.MakeSigner(chainConfig, header.Number, header.Time)
-		signingHash := signer.Hash(tx)
-		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, signingHash)
+		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
 			log.Warn("[RIP-7560] Failed to ApplyRip7560ValidationPhases", "err", err)
 			// If an error occurs in the validation phase, invalidate the transaction
@@ -203,7 +201,7 @@ func CheckNonceRip7560(tx *types.Rip7560AccountAbstractionTx, st *state.StateDB)
 	return nil
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, signingHash common.Hash, estimate ...bool) (*ValidationPhaseResult, error) {
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, estimate ...bool) (*ValidationPhaseResult, error) {
 	var estimateFlag = false
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
@@ -280,6 +278,8 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	}
 
 	/*** Account Validation Frame ***/
+	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
+	signingHash := signer.Hash(tx)
 	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas)
 	resultAccountValidation, err := ApplyMessage(evm, accountValidationMsg, gp)
 	if err != nil {
