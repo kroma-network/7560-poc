@@ -2,7 +2,6 @@ package core
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -18,11 +17,42 @@ import (
 	"strings"
 )
 
-const MaxContextSize = 65536
+const MAGIC_VALUE_SENDER = uint64(0xbf45c166)
+const MAGIC_VALUE_PAYMASTER = uint64(0xe0e6183a)
+const MAGIC_VALUE_SIGFAIL = uint64(0x31665494)
+const PAYMASTER_MAX_CONTEXT_SIZE = 65536
 
-var MAGIC_VALUE_SENDER = [20]byte{0xbf, 0x45, 0xc1, 0x66}
-var MAGIC_VALUE_PAYMASTER = [20]byte{0xe0, 0xe6, 0x18, 0x3a}
-var MAGIC_VALUE_SIGFAIL = [20]byte{0x31, 0x66, 0x54, 0x94}
+func PackValidationData(authorizerMagic uint64, validUntil, validAfter uint64) []byte {
+	t := new(big.Int).SetUint64(uint64(validAfter))
+	t = t.Lsh(t, 48).Add(t, new(big.Int).SetUint64(validUntil&0xffffff))
+	t = t.Lsh(t, 160).Add(t, new(big.Int).SetUint64(uint64(authorizerMagic)))
+	return common.LeftPadBytes(t.Bytes(), 32)
+}
+
+func UnpackValidationData(validationData []byte) (uint64, uint64, uint64) {
+	authorizerMagic := new(big.Int).SetBytes(validationData[:20]).Uint64()
+	validUntil := new(big.Int).SetBytes(validationData[20:26]).Uint64()
+	validAfter := new(big.Int).SetBytes(validationData[26:32]).Uint64()
+	return authorizerMagic, validUntil, validAfter
+}
+
+func UnpackPaymasterValidationReturn(paymasterValidationReturn []byte) ([]byte, []byte, error) {
+	if len(paymasterValidationReturn) < 96 {
+		return nil, nil, errors.New("paymaster return data: too short")
+	}
+	validationData := paymasterValidationReturn[0:32]
+	//2nd bytes32 is ignored (its an offset value)
+	contextLen := new(big.Int).SetBytes(paymasterValidationReturn[64:96])
+	if uint64(len(paymasterValidationReturn)) < 96+contextLen.Uint64() {
+		return nil, nil, errors.New("paymaster return data: unable to decode context")
+	}
+	if contextLen.Cmp(big.NewInt(PAYMASTER_MAX_CONTEXT_SIZE)) > 0 {
+		return nil, nil, errors.New("paymaster return data: context too large")
+	}
+
+	context := paymasterValidationReturn[96 : 96+contextLen.Uint64()]
+	return validationData, context, nil
+}
 
 type ValidationPhaseResult struct {
 	TxIndex                int
@@ -377,11 +407,13 @@ func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *Exec
 func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, payment *common.Address, prepaidGas *uint256.Int) (*ExecutionResult, *ExecutionResult, uint64, error) {
 	// revert back here if postOp fails
 	var snapshot = statedb.Snapshot()
+
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
 	message, err := TransactionToMessage(vpr.Tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
 	txContext := NewEVMTxContext(message)
 	txContext.Origin = *vpr.Tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
+
 	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
 	executionResult, err := ApplyMessage(evm, accountExecutionMsg, gp)
 	if err != nil {
@@ -620,55 +652,31 @@ func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, 
 	if len(data) != 32 {
 		return 0, 0, errors.New("invalid account return data length")
 	}
-	magicExpected := common.Bytes2Hex(data[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
-		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+	magicExpected, validUntil, validAfter := UnpackValidationData(data)
+	//todo: we check first 8 bytes of the 20-byte address (the rest is expected to be zeros)
+	if magicExpected != MAGIC_VALUE_SENDER {
+		if magicExpected == MAGIC_VALUE_SIGFAIL {
 			if !estimateFlag {
-				return 0, 0, errors.New("account return MAGIC_VALUE_SIGFAIL")
+				return 0, 0, errors.New("account signature error")
 			}
 		}
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
-	validUntil := binary.BigEndian.Uint64(data[4:12])
-	validAfter := binary.BigEndian.Uint64(data[12:20])
 	return validAfter, validUntil, nil
 }
 
 func validatePaymasterReturnData(data []byte, estimateFlag bool) ([]byte, uint64, uint64, error) {
-	jsondata := `[
-		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
-	]`
-	validatePaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
-	if err != nil {
-		// todo: wrap error message
-		return nil, 0, 0, err
+	if len(data) < 32 {
+		return nil, 0, 0, errors.New("invalid paymaster return data length")
 	}
-
-	var validatePaymasterResult struct {
-		ValidationData [32]byte
-		Context        []byte
-	}
-
-	err = validatePaymasterTransactionAbi.UnpackIntoInterface(&validatePaymasterResult, "validatePaymasterTransaction", data)
+	validationData, context, err := UnpackPaymasterValidationReturn(data)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	if len(validatePaymasterResult.Context) > MaxContextSize {
-		return nil, 0, 0, errors.New("paymaster returned context size too large")
-	}
-	magicExpected := common.Bytes2Hex(validatePaymasterResult.ValidationData[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
-		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
-			if !estimateFlag {
-				return nil, 0, 0, errors.New("paymaster return MAGIC_VALUE_SIGFAIL")
-			}
-		}
+	magicExpected, validUntil, validAfter := UnpackValidationData(validationData)
+	if magicExpected != MAGIC_VALUE_PAYMASTER {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
-	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
-	validAfter := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[12:20])
-	context := validatePaymasterResult.Context
-
 	return context, validAfter, validUntil, nil
 }
 
