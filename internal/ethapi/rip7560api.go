@@ -125,7 +125,7 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 
 	// Execute the validation phase.
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	_, _, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
 	if err != nil {
 		return nil, err
 	}
@@ -172,7 +172,7 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 	tx := args.toTransaction()
 
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	payment, prepaidGas, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	err = core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +182,6 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 		Header:     header,
 		State:      state,
 		ErrorRatio: estimateGasErrorRatio,
-		Payment:    payment,
-		PrepaidGas: prepaidGas,
 	}
 
 	vg, err := gasestimator.EstimateRip7560Validation(ctx, tx, opts, gasCap)

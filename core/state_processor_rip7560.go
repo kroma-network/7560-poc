@@ -63,11 +63,11 @@ func HandleRip7560Transactions(transactions []*types.Transaction, index int, sta
 func handleRip7560Transactions(transactions []*types.Transaction, index int, statedb *state.StateDB, coinbase *common.Address, header *types.Header, gp *GasPool, chainConfig *params.ChainConfig, bc ChainContext, cfg vm.Config) ([]*types.Transaction, types.Receipts, []*types.Log, error) {
 	validationPhaseResults := make([]*ValidationPhaseResult, 0)
 	validatedTransactions := make([]*types.Transaction, 0)
-	var bundleHeaderTransaction *types.Transaction
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
 
 	// check bundle header transaction exists
+	var bundleHeaderTransaction *types.Transaction
 	if transactions[0].Type() == types.Rip7560BundleHeaderType {
 		bundleHeaderTransaction = transactions[0]
 		transactions = transactions[1:]
@@ -86,19 +86,12 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			prevGas  = gp.Gas()
 		)
 
-		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
-		log.Info("[RIP-7560] Validation Phase - BuyGas", "i", i)
-		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
-		if err != nil {
-			log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
-			// TODO : do we have to drop bundle?
-			continue
-		}
+		statedb.SetTxContext(tx.Hash(), index+i)
 		var vpr *ValidationPhaseResult
 		log.Info("[RIP-7560] Validation Phase - Validation")
 		signer := types.MakeSigner(chainConfig, header.Number, header.Time)
 		signingHash := signer.Hash(tx)
-		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, signingHash)
+		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, signingHash)
 		if err != nil {
 			log.Warn("[RIP-7560] Failed to ApplyRip7560ValidationPhases", "err", err)
 			// If an error occurs in the validation phase, invalidate the transaction
@@ -108,8 +101,6 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		}
 		statedb.IntermediateRoot(true)
 
-		vpr.Payment = payment
-		vpr.PrepaidGas = prepaidGas
 		validationPhaseResults = append(validationPhaseResults, vpr)
 		validatedTransactions = append(validatedTransactions, tx)
 	}
@@ -159,7 +150,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // BuyGasRip7560Transaction
 // todo: move to a suitable interface, whatever that is
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
-func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB) (*common.Address, *uint256.Int, error) {
+func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB) error {
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas + params.Tx7560BaseGas
 	// Store prepaid values in gas units
@@ -178,20 +169,38 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	balanceCheck := new(uint256.Int).Set(mgval)
 
 	chargeFrom := *st.Sender
-	if st.Paymaster != nil {
+	if st.Paymaster != nil && st.Paymaster.Cmp(common.Address{}) != 0 {
 		chargeFrom = *st.Paymaster
 	}
 
 	if have, want := state.GetBalance(chargeFrom), balanceCheck; have.Cmp(want) < 0 {
-		return &common.Address{}, new(uint256.Int), fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
+		return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
 	}
 
 	state.SubBalance(chargeFrom, mgval)
 	err := gp.SubGas(mggas.Uint64())
 	if err != nil {
-		return &common.Address{}, new(uint256.Int), err
+		return err
 	}
-	return &chargeFrom, mggas, nil
+	return nil
+}
+
+// CheckNonceRip7560 prechecks nonce of transaction.
+// (standard preCheck function check both nonce and no-code of account)
+func CheckNonceRip7560(tx *types.Rip7560AccountAbstractionTx, st *state.StateDB) error {
+	// Make sure this transaction's nonce is correct.
+	stNonce := st.GetNonce(*tx.Sender)
+	if msgNonce := tx.Nonce; stNonce < msgNonce {
+		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooHigh,
+			tx.Sender.Hex(), msgNonce, stNonce)
+	} else if stNonce > msgNonce {
+		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooLow,
+			tx.Sender.Hex(), msgNonce, stNonce)
+	} else if stNonce+1 < stNonce {
+		return fmt.Errorf("%w: address %v, nonce: %d", ErrNonceMax,
+			tx.Sender.Hex(), stNonce)
+	}
+	return nil
 }
 
 func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, signingHash common.Hash, estimate ...bool) (*ValidationPhaseResult, error) {
@@ -199,6 +208,17 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
 	}
+	err := CheckNonceRip7560(tx.Rip7560TransactionData(), statedb)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("[RIP-7560] Validation Phase - BuyGas")
+	err = BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
+	if err != nil {
+		log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
+		return nil, err
+	}
+
 	sender := tx.Rip7560TransactionData().Sender
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := vm.TxContext{
@@ -226,11 +246,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "legacy-nonce")
 		// Use legacy nonce validation
 		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
-		// TODO(sm-stack): add error messages like ErrNonceTooLow, ErrNonceTooHigh, etc.
-		if msgNonce := tx.Rip7560TransactionData().BigNonce.Uint64(); stNonce != msgNonce {
-			return nil, errors.New("nonce validation failed - invalid transaction")
-		} else if stNonce == 0 {
-		} else {
+		if stNonce != 0 {
 			statedb.SetNonce(txContext.Origin, stNonce+1)
 		}
 	}
@@ -475,7 +491,7 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 
 func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64) *Message {
 	tx := baseTx.Rip7560TransactionData()
-	if tx.Deployer == nil {
+	if tx.Deployer == nil || tx.Deployer.Cmp(common.Address{}) == 0 {
 		return nil
 	}
 	return &Message{
