@@ -546,7 +546,8 @@ func (rs Receipts) DeriveFields(config *params.ChainConfig, hash common.Hash, nu
 		rs[i].TransactionIndex = uint(i)
 
 		// The contract address can be derived from the transaction itself
-		if txs[i].To() == nil {
+		// AA transactions always have "sender" as the account address, regardless if it is created by this TX
+		if txs[i].To() == nil && txs[i].Type() != Rip7560Type {
 			// Deriving the signer is expensive, only do if it's actually needed
 			from, _ := Sender(signer, txs[i])
 			nonce := txs[i].Nonce()

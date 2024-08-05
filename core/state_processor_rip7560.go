@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -59,6 +58,8 @@ type ValidationPhaseResult struct {
 	Tx                     *types.Transaction
 	TxHash                 common.Hash
 	PaymasterContext       []byte
+	PreCharge              *uint256.Int
+	EffectiveGasPrice      *uint256.Int
 	NonceValidationUsedGas uint64
 	DeploymentUsedGas      uint64
 	ValidationUsedGas      uint64
@@ -67,8 +68,6 @@ type ValidationPhaseResult struct {
 	SenderValidUntil       uint64
 	PmValidAfter           uint64
 	PmValidUntil           uint64
-	Payment                *common.Address
-	PrepaidGas             *uint256.Int
 }
 
 // HandleRip7560Transactions apply state changes of all sequential RIP-7560 transactions and return
@@ -134,18 +133,21 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	}
 
 	// This is the line separating the Validation and Execution phases
-	// It should be separated to implement the mempool-friendly AA RIP (number not assigned yet)
 	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
 		statedb.SetTxContext(vpr.Tx.Hash(), i)
 		log.Info("[RIP-7560] Execution Phase", "i", i)
-		executionResult, paymasterPostOpResult, cumulativeGasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, vpr.Payment, vpr.PrepaidGas)
+		executionResult, paymasterPostOpResult, gasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg)
 
 		root := statedb.IntermediateRoot(true).Bytes()
-		receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, CumulativeGasUsed: cumulativeGasUsed}
+		// TODO: reflect the real value of cumulative gas
+		receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, TxHash: vpr.Tx.Hash(), GasUsed: gasUsed, CumulativeGasUsed: gasUsed}
 
 		// Set the receipt logs and create the bloom filter.
 		receipt.Logs = statedb.GetLogs(vpr.Tx.Hash(), header.Number.Uint64(), header.Hash())
+		receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+		// TODO: consider way to add blocknumber and blockhash to receipt
+		receipt.TransactionIndex = uint(vpr.TxIndex)
 
 		if executionResult.Failed() || (paymasterPostOpResult != nil && paymasterPostOpResult.Failed()) {
 			receipt.Status = types.ReceiptStatusFailed
@@ -178,14 +180,12 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // BuyGasRip7560Transaction
 // todo: move to a suitable interface, whatever that is
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
-func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB) error {
+func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB, gasPrice *uint256.Int) (*uint256.Int, error) {
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas + params.Tx7560BaseGas
 	// Store prepaid values in gas units
-	mggas := new(uint256.Int).SetUint64(gasLimit)
-	// adjust effectiveGasPrice
-	effectiveGasPrice := cmath.BigMin(new(big.Int).Add(st.GasTipCap, header.BaseFee), st.GasFeeCap)
-	mgval := new(uint256.Int).Mul(mggas, new(uint256.Int).SetUint64(effectiveGasPrice.Uint64()))
+	preCharge := new(uint256.Int).SetUint64(gasLimit)
+	preCharge = preCharge.Mul(preCharge, gasPrice)
 
 	// calculate rollup cost
 	var l1Cost *big.Int
@@ -193,8 +193,9 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	if L1CostFunc != nil {
 		l1Cost = L1CostFunc(tx.RollupCostData(), header.Time)
 	}
-	mgval = mgval.Add(mgval, new(uint256.Int).SetUint64(l1Cost.Uint64()))
-	balanceCheck := new(uint256.Int).Set(mgval)
+	preCharge = preCharge.Add(preCharge, new(uint256.Int).SetUint64(l1Cost.Uint64()))
+
+	balanceCheck := new(uint256.Int).Set(preCharge)
 
 	chargeFrom := *st.Sender
 	if st.Paymaster != nil && st.Paymaster.Cmp(common.Address{}) != 0 {
@@ -202,15 +203,33 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	}
 
 	if have, want := state.GetBalance(chargeFrom), balanceCheck; have.Cmp(want) < 0 {
-		return fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
+		return nil, fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
 	}
 
-	state.SubBalance(chargeFrom, mgval)
-	err := gp.SubGas(mggas.Uint64())
+	state.SubBalance(chargeFrom, preCharge)
+	err := gp.SubGas(preCharge.Uint64())
 	if err != nil {
-		return err
+		return nil, err
 	}
-	return nil
+	return preCharge, nil
+}
+
+// refund the transaction payer (either account or paymaster) with the excess gas cost
+func refundPayer(vpr *ValidationPhaseResult, state vm.StateDB, gasUsed uint64, gp *GasPool) {
+	var chargeFrom *common.Address
+	if vpr.PmValidationUsedGas == 0 {
+		chargeFrom = vpr.Tx.Rip7560TransactionData().Sender
+	} else {
+		chargeFrom = vpr.Tx.Rip7560TransactionData().Paymaster
+	}
+
+	actualGasCost := new(uint256.Int).Mul(vpr.EffectiveGasPrice, new(uint256.Int).SetUint64(gasUsed))
+
+	refund := new(uint256.Int).Sub(vpr.PreCharge, actualGasCost)
+
+	state.AddBalance(*chargeFrom, refund)
+
+	gp.AddGas(refund.Uint64())
 }
 
 // CheckNonceRip7560 prechecks nonce of transaction.
@@ -241,7 +260,14 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		return nil, err
 	}
 	log.Info("[RIP-7560] Validation Phase - BuyGas")
-	err = BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
+
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
+	preCharge, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb, gasPriceUint256)
 	if err != nil {
 		log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
 		return nil, err
@@ -251,7 +277,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := vm.TxContext{
 		Origin:   *sender,
-		GasPrice: tx.GasFeeCap(),
+		GasPrice: gasPrice,
 	}
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
@@ -339,6 +365,8 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	vpr := &ValidationPhaseResult{
 		Tx:                     tx,
 		TxHash:                 tx.Hash(),
+		PreCharge:              preCharge,
+		EffectiveGasPrice:      gasPriceUint256,
 		PaymasterContext:       paymasterContext,
 		NonceValidationUsedGas: nonceValidationUsedGas,
 		DeploymentUsedGas:      deploymentUsedGas,
@@ -404,7 +432,7 @@ func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *Exec
 	return paymasterPostOpResult, nil
 }
 
-func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, payment *common.Address, prepaidGas *uint256.Int) (*ExecutionResult, *ExecutionResult, uint64, error) {
+func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config) (*ExecutionResult, *ExecutionResult, uint64, error) {
 	// revert back here if postOp fails
 	var snapshot = statedb.Snapshot()
 
@@ -436,14 +464,14 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 		}
 	}
 
-	cumulativeGasUsed :=
+	gasUsed :=
 		vpr.NonceValidationUsedGas +
 			vpr.ValidationUsedGas +
 			vpr.DeploymentUsedGas +
 			vpr.PmValidationUsedGas +
 			executionResult.UsedGas
 	if paymasterPostOpResult != nil {
-		cumulativeGasUsed +=
+		gasUsed +=
 			paymasterPostOpResult.UsedGas
 	}
 
@@ -454,19 +482,19 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	cumulativeGasUsed += intrGas
+	gasUsed += intrGas
 
 	// apply a penalty && refund gas
 	// TODO: If this value is not persistent, it should be modified to be managed on-chain config
 	const UNUSED_GAS_PENALTY_PERCENT = 10
 	//gasPenalty := (prepaidGas.Uint64() - cumulativeGasUsed) * UNUSED_GAS_PENALTY_PERCENT / 100
 	var gasPenalty uint64 = 0
-	cumulativeGasUsed += gasPenalty
-	statedb.AddBalance(*payment, uint256.NewInt((prepaidGas.Uint64()-cumulativeGasUsed)*evm.Context.BaseFee.Uint64()))
-	gp.AddGas(prepaidGas.Uint64() - cumulativeGasUsed)
+	gasUsed += gasPenalty
+
+	refundPayer(vpr, statedb, gasUsed, gp)
 
 	// payments for rollup gas expenses to recipients
-	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(cumulativeGasUsed), evm.Context.BaseFee)
+	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), evm.Context.BaseFee)
 	amtU256, overflow := uint256.FromBig(gasCost)
 	if overflow {
 		return nil, nil, 0, fmt.Errorf("optimism gas cost overflows U256: %d", gasCost)
@@ -484,9 +512,9 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if paymasterPostOpResult != nil {
 		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
 	}
-	log.Info("[RIP-7560] Execution gas info", "cumulativeGasUsed", cumulativeGasUsed)
+	log.Info("[RIP-7560] Execution gas info", "gasUsed", gasUsed)
 
-	return executionResult, paymasterPostOpResult, cumulativeGasUsed, nil
+	return executionResult, paymasterPostOpResult, gasUsed, nil
 }
 
 func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {

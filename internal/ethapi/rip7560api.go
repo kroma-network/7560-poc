@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/holiman/uint256"
 	"golang.org/x/crypto/sha3"
 	"math"
 	"math/big"
@@ -121,9 +122,15 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 		evm.Cancel()
 	}()
 
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
 	// Execute the validation phase.
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	_, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state, gasPriceUint256)
 	if err != nil {
 		return nil, err
 	}
@@ -169,8 +176,14 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 	bc := NewChainContext(ctx, b)
 	tx := args.toTransaction()
 
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	err = core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	_, err = core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state, gasPriceUint256)
 	if err != nil {
 		return nil, err
 	}

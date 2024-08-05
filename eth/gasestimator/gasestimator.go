@@ -423,7 +423,7 @@ func executeRip7560Execution(ctx context.Context, tx *types.Transaction, opts *O
 
 	// Gas Pool is set to half of the maximum possible gas to prevent overflow.
 	// Unused gas penalty is not taken into account, since it does not affect the estimation.
-	exr, ppr, _, err := core.ApplyRip7560ExecutionPhase(opts.Config, opts.ValidationPhaseResult, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, vm.Config{NoBaseFee: true}, opts.Payment, opts.PrepaidGas)
+	exr, ppr, _, err := core.ApplyRip7560ExecutionPhase(opts.Config, opts.ValidationPhaseResult, opts.Chain, &opts.Header.Coinbase, new(core.GasPool).AddGas(math.MaxUint64/2), dirtyState, opts.Header, vm.Config{NoBaseFee: true})
 	if err != nil {
 		if errors.Is(err, core.ErrIntrinsicGas) {
 			return true, nil, nil, nil // Special case, raise gas limit
