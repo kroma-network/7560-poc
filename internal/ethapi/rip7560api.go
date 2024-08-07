@@ -14,6 +14,7 @@ import (
 	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/rlp"
 	"github.com/ethereum/go-ethereum/rpc"
+	"github.com/holiman/uint256"
 	"golang.org/x/crypto/sha3"
 	"math"
 	"math/big"
@@ -114,8 +115,6 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 	}
 	evm := vm.NewEVM(blockContext, txContext, state, chainConfig, vm.Config{NoBaseFee: true})
 
-	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
-	signingHash := signer.Hash(tx)
 	// Wait for the context to be done and cancel the evm. Even if the
 	// EVM has finished, cancelling may be done (repeatedly)
 	go func() {
@@ -123,14 +122,20 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 		evm.Cancel()
 	}()
 
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
 	// Execute the validation phase.
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	_, _, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	_, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state, gasPriceUint256)
 	if err != nil {
 		return nil, err
 	}
 
-	result, err := core.ApplyRip7560ValidationPhases(chainConfig, bc, &header.Coinbase, gp, state, header, tx, evm.Config, signingHash)
+	result, err := core.ApplyRip7560ValidationPhases(chainConfig, bc, &header.Coinbase, gp, state, header, tx, evm.Config)
 	if err := state.Error(); err != nil {
 		return nil, err
 	}
@@ -171,8 +176,14 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 	bc := NewChainContext(ctx, b)
 	tx := args.toTransaction()
 
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
-	payment, prepaidGas, err := core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state)
+	_, err = core.BuyGasRip7560Transaction(chainConfig, gp, header, tx, state, gasPriceUint256)
 	if err != nil {
 		return nil, err
 	}
@@ -182,8 +193,6 @@ func DoEstimateRip7560TransactionGas(ctx context.Context, b Backend, args Transa
 		Header:     header,
 		State:      state,
 		ErrorRatio: estimateGasErrorRatio,
-		Payment:    payment,
-		PrepaidGas: prepaidGas,
 	}
 
 	vg, err := gasestimator.EstimateRip7560Validation(ctx, tx, opts, gasCap)

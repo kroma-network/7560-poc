@@ -68,13 +68,10 @@ func validatePhase(tb *testContextBuilder, aatx types.Rip7560AccountAbstractionT
 	}
 	tx := types.NewTx(&aatx)
 
-	var state, _, statedb = tests.MakePreState(rawdb.NewMemoryDatabase(), t.genesisAlloc, false, rawdb.HashScheme)
-	defer state.Close()
+	testState := tests.MakePreState(rawdb.NewMemoryDatabase(), t.genesisAlloc, false, rawdb.HashScheme)
+	defer testState.TrieDB.Close()
 
-	signer := types.MakeSigner(t.genesis.Config, t.genesisBlock.Header().Number, t.genesisBlock.Header().Time)
-	signingHash := signer.Hash(tx)
-
-	_, err := core.ApplyRip7560ValidationPhases(t.genesis.Config, t.chainContext, &common.Address{}, t.gaspool, statedb, t.genesisBlock.Header(), tx, vm.Config{}, signingHash)
+	_, err := core.ApplyRip7560ValidationPhases(t.genesis.Config, t.chainContext, &common.Address{}, t.gaspool, testState.StateDB, t.genesisBlock.Header(), tx, vm.Config{})
 	// err string or empty if nil
 	errStr := ""
 	if err != nil {

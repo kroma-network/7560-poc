@@ -2,12 +2,10 @@ package core
 
 import (
 	"bytes"
-	"encoding/binary"
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
 	"github.com/ethereum/go-ethereum/common"
-	cmath "github.com/ethereum/go-ethereum/common/math"
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
@@ -18,17 +16,50 @@ import (
 	"strings"
 )
 
-const MaxContextSize = 65536
+const MAGIC_VALUE_SENDER = uint64(0xbf45c166)
+const MAGIC_VALUE_PAYMASTER = uint64(0xe0e6183a)
+const MAGIC_VALUE_SIGFAIL = uint64(0x31665494)
+const PAYMASTER_MAX_CONTEXT_SIZE = 65536
 
-var MAGIC_VALUE_SENDER = [20]byte{0xbf, 0x45, 0xc1, 0x66}
-var MAGIC_VALUE_PAYMASTER = [20]byte{0xe0, 0xe6, 0x18, 0x3a}
-var MAGIC_VALUE_SIGFAIL = [20]byte{0x31, 0x66, 0x54, 0x94}
+func PackValidationData(authorizerMagic uint64, validUntil, validAfter uint64) []byte {
+	t := new(big.Int).SetUint64(uint64(validAfter))
+	t = t.Lsh(t, 48).Add(t, new(big.Int).SetUint64(validUntil&0xffffff))
+	t = t.Lsh(t, 160).Add(t, new(big.Int).SetUint64(uint64(authorizerMagic)))
+	return common.LeftPadBytes(t.Bytes(), 32)
+}
+
+func UnpackValidationData(validationData []byte) (uint64, uint64, uint64) {
+	authorizerMagic := new(big.Int).SetBytes(validationData[:20]).Uint64()
+	validUntil := new(big.Int).SetBytes(validationData[20:26]).Uint64()
+	validAfter := new(big.Int).SetBytes(validationData[26:32]).Uint64()
+	return authorizerMagic, validUntil, validAfter
+}
+
+func UnpackPaymasterValidationReturn(paymasterValidationReturn []byte) ([]byte, []byte, error) {
+	if len(paymasterValidationReturn) < 96 {
+		return nil, nil, errors.New("paymaster return data: too short")
+	}
+	validationData := paymasterValidationReturn[0:32]
+	//2nd bytes32 is ignored (its an offset value)
+	contextLen := new(big.Int).SetBytes(paymasterValidationReturn[64:96])
+	if uint64(len(paymasterValidationReturn)) < 96+contextLen.Uint64() {
+		return nil, nil, errors.New("paymaster return data: unable to decode context")
+	}
+	if contextLen.Cmp(big.NewInt(PAYMASTER_MAX_CONTEXT_SIZE)) > 0 {
+		return nil, nil, errors.New("paymaster return data: context too large")
+	}
+
+	context := paymasterValidationReturn[96 : 96+contextLen.Uint64()]
+	return validationData, context, nil
+}
 
 type ValidationPhaseResult struct {
 	TxIndex                int
 	Tx                     *types.Transaction
 	TxHash                 common.Hash
 	PaymasterContext       []byte
+	PreCharge              *uint256.Int
+	EffectiveGasPrice      *uint256.Int
 	NonceValidationUsedGas uint64
 	DeploymentUsedGas      uint64
 	ValidationUsedGas      uint64
@@ -37,8 +68,6 @@ type ValidationPhaseResult struct {
 	SenderValidUntil       uint64
 	PmValidAfter           uint64
 	PmValidUntil           uint64
-	Payment                *common.Address
-	PrepaidGas             *uint256.Int
 }
 
 // HandleRip7560Transactions apply state changes of all sequential RIP-7560 transactions and return
@@ -63,17 +92,17 @@ func HandleRip7560Transactions(transactions []*types.Transaction, index int, sta
 func handleRip7560Transactions(transactions []*types.Transaction, index int, statedb *state.StateDB, coinbase *common.Address, header *types.Header, gp *GasPool, chainConfig *params.ChainConfig, bc ChainContext, cfg vm.Config) ([]*types.Transaction, types.Receipts, []*types.Log, error) {
 	validationPhaseResults := make([]*ValidationPhaseResult, 0)
 	validatedTransactions := make([]*types.Transaction, 0)
-	var bundleHeaderTransaction *types.Transaction
 	receipts := make([]*types.Receipt, 0)
 	allLogs := make([]*types.Log, 0)
 
 	// check bundle header transaction exists
+	var bundleHeaderTransaction *types.Transaction
 	if transactions[0].Type() == types.Rip7560BundleHeaderType {
 		bundleHeaderTransaction = transactions[0]
 		transactions = transactions[1:]
 	}
 
-	for i, tx := range transactions[index:] {
+	for _, tx := range transactions[index:] {
 		if tx.Type() != types.Rip7560Type {
 			break
 		}
@@ -86,19 +115,10 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			prevGas  = gp.Gas()
 		)
 
-		statedb.SetTxContext(tx.Hash(), len(validatedTransactions))
-		log.Info("[RIP-7560] Validation Phase - BuyGas", "i", i)
-		payment, prepaidGas, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb)
-		if err != nil {
-			log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
-			// TODO : do we have to drop bundle?
-			continue
-		}
+		statedb.SetTxContext(tx.Hash(), index+len(validatedTransactions))
 		var vpr *ValidationPhaseResult
 		log.Info("[RIP-7560] Validation Phase - Validation")
-		signer := types.MakeSigner(chainConfig, header.Number, header.Time)
-		signingHash := signer.Hash(tx)
-		vpr, err = ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg, signingHash)
+		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
 			log.Warn("[RIP-7560] Failed to ApplyRip7560ValidationPhases", "err", err)
 			// If an error occurs in the validation phase, invalidate the transaction
@@ -108,25 +128,26 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		}
 		statedb.IntermediateRoot(true)
 
-		vpr.Payment = payment
-		vpr.PrepaidGas = prepaidGas
 		validationPhaseResults = append(validationPhaseResults, vpr)
 		validatedTransactions = append(validatedTransactions, tx)
 	}
 
 	// This is the line separating the Validation and Execution phases
-	// It should be separated to implement the mempool-friendly AA RIP (number not assigned yet)
 	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
-		statedb.SetTxContext(vpr.Tx.Hash(), i)
+		statedb.SetTxContext(vpr.Tx.Hash(), index+i)
 		log.Info("[RIP-7560] Execution Phase", "i", i)
-		executionResult, paymasterPostOpResult, cumulativeGasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg, vpr.Payment, vpr.PrepaidGas)
+		executionResult, paymasterPostOpResult, gasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg)
 
 		root := statedb.IntermediateRoot(true).Bytes()
-		receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, CumulativeGasUsed: cumulativeGasUsed}
+		// TODO: reflect the real value of cumulative gas
+		receipt := &types.Receipt{Type: vpr.Tx.Type(), PostState: root, TxHash: vpr.Tx.Hash(), GasUsed: gasUsed, CumulativeGasUsed: gasUsed}
 
 		// Set the receipt logs and create the bloom filter.
 		receipt.Logs = statedb.GetLogs(vpr.Tx.Hash(), header.Number.Uint64(), header.Hash())
+		receipt.Bloom = types.CreateBloom(types.Receipts{receipt})
+		// TODO: consider way to add blocknumber and blockhash to receipt
+		receipt.TransactionIndex = uint(vpr.TxIndex)
 
 		if executionResult.Failed() || (paymasterPostOpResult != nil && paymasterPostOpResult.Failed()) {
 			receipt.Status = types.ReceiptStatusFailed
@@ -159,14 +180,12 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // BuyGasRip7560Transaction
 // todo: move to a suitable interface, whatever that is
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
-func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB) (*common.Address, *uint256.Int, error) {
+func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB, gasPrice *uint256.Int) (*uint256.Int, error) {
 	st := tx.Rip7560TransactionData()
 	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas + params.Tx7560BaseGas
 	// Store prepaid values in gas units
-	mggas := new(uint256.Int).SetUint64(gasLimit)
-	// adjust effectiveGasPrice
-	effectiveGasPrice := cmath.BigMin(new(big.Int).Add(st.GasTipCap, header.BaseFee), st.GasFeeCap)
-	mgval := new(uint256.Int).Mul(mggas, new(uint256.Int).SetUint64(effectiveGasPrice.Uint64()))
+	preCharge := new(uint256.Int).SetUint64(gasLimit)
+	preCharge = preCharge.Mul(preCharge, gasPrice)
 
 	// calculate rollup cost
 	var l1Cost *big.Int
@@ -174,36 +193,91 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	if L1CostFunc != nil {
 		l1Cost = L1CostFunc(tx.RollupCostData(), header.Time)
 	}
-	mgval = mgval.Add(mgval, new(uint256.Int).SetUint64(l1Cost.Uint64()))
-	balanceCheck := new(uint256.Int).Set(mgval)
+	preCharge = preCharge.Add(preCharge, new(uint256.Int).SetUint64(l1Cost.Uint64()))
+
+	balanceCheck := new(uint256.Int).Set(preCharge)
 
 	chargeFrom := *st.Sender
-	if st.Paymaster != nil {
+	if st.Paymaster != nil && st.Paymaster.Cmp(common.Address{}) != 0 {
 		chargeFrom = *st.Paymaster
 	}
 
 	if have, want := state.GetBalance(chargeFrom), balanceCheck; have.Cmp(want) < 0 {
-		return &common.Address{}, new(uint256.Int), fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
+		return nil, fmt.Errorf("%w: address %v have %v want %v", ErrInsufficientFunds, chargeFrom.Hex(), have, want)
 	}
 
-	state.SubBalance(chargeFrom, mgval)
-	err := gp.SubGas(mggas.Uint64())
+	state.SubBalance(chargeFrom, preCharge)
+	err := gp.SubGas(preCharge.Uint64())
 	if err != nil {
-		return &common.Address{}, new(uint256.Int), err
+		return nil, err
 	}
-	return &chargeFrom, mggas, nil
+	return preCharge, nil
 }
 
-func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, signingHash common.Hash, estimate ...bool) (*ValidationPhaseResult, error) {
+// refund the transaction payer (either account or paymaster) with the excess gas cost
+func refundPayer(vpr *ValidationPhaseResult, state vm.StateDB, gasUsed uint64, gp *GasPool) {
+	var chargeFrom *common.Address
+	if vpr.PmValidationUsedGas == 0 {
+		chargeFrom = vpr.Tx.Rip7560TransactionData().Sender
+	} else {
+		chargeFrom = vpr.Tx.Rip7560TransactionData().Paymaster
+	}
+
+	actualGasCost := new(uint256.Int).Mul(vpr.EffectiveGasPrice, new(uint256.Int).SetUint64(gasUsed))
+
+	refund := new(uint256.Int).Sub(vpr.PreCharge, actualGasCost)
+
+	state.AddBalance(*chargeFrom, refund)
+
+	gp.AddGas(refund.Uint64())
+}
+
+// CheckNonceRip7560 prechecks nonce of transaction.
+// (standard preCheck function check both nonce and no-code of account)
+func CheckNonceRip7560(tx *types.Rip7560AccountAbstractionTx, st *state.StateDB) error {
+	// Make sure this transaction's nonce is correct.
+	stNonce := st.GetNonce(*tx.Sender)
+	if msgNonce := tx.Nonce; stNonce < msgNonce {
+		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooHigh,
+			tx.Sender.Hex(), msgNonce, stNonce)
+	} else if stNonce > msgNonce {
+		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooLow,
+			tx.Sender.Hex(), msgNonce, stNonce)
+	} else if stNonce+1 < stNonce {
+		return fmt.Errorf("%w: address %v, nonce: %d", ErrNonceMax,
+			tx.Sender.Hex(), stNonce)
+	}
+	return nil
+}
+
+func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, tx *types.Transaction, cfg vm.Config, estimate ...bool) (*ValidationPhaseResult, error) {
 	var estimateFlag = false
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
 	}
+	err := CheckNonceRip7560(tx.Rip7560TransactionData(), statedb)
+	if err != nil {
+		return nil, err
+	}
+	log.Info("[RIP-7560] Validation Phase - BuyGas")
+
+	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
+	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
+		gasPrice = tx.GasFeeCap()
+	}
+	gasPriceUint256, _ := uint256.FromBig(gasPrice)
+
+	preCharge, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb, gasPriceUint256)
+	if err != nil {
+		log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
+		return nil, err
+	}
+
 	sender := tx.Rip7560TransactionData().Sender
 	blockContext := NewEVMBlockContext(header, bc, author, chainConfig, statedb)
 	txContext := vm.TxContext{
 		Origin:   *sender,
-		GasPrice: tx.GasFeeCap(),
+		GasPrice: gasPrice,
 	}
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
@@ -226,11 +300,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "legacy-nonce")
 		// Use legacy nonce validation
 		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
-		// TODO(sm-stack): add error messages like ErrNonceTooLow, ErrNonceTooHigh, etc.
-		if msgNonce := tx.Rip7560TransactionData().BigNonce.Uint64(); stNonce != msgNonce {
-			return nil, errors.New("nonce validation failed - invalid transaction")
-		} else if stNonce == 0 {
-		} else {
+		if stNonce != 0 {
 			statedb.SetNonce(txContext.Origin, stNonce+1)
 		}
 	}
@@ -264,6 +334,8 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	}
 
 	/*** Account Validation Frame ***/
+	signer := types.MakeSigner(chainConfig, header.Number, header.Time)
+	signingHash := signer.Hash(tx)
 	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas)
 	resultAccountValidation, err := ApplyMessage(evm, accountValidationMsg, gp)
 	if err != nil {
@@ -293,6 +365,8 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	vpr := &ValidationPhaseResult{
 		Tx:                     tx,
 		TxHash:                 tx.Hash(),
+		PreCharge:              preCharge,
+		EffectiveGasPrice:      gasPriceUint256,
 		PaymasterContext:       paymasterContext,
 		NonceValidationUsedGas: nonceValidationUsedGas,
 		DeploymentUsedGas:      deploymentUsedGas,
@@ -358,14 +432,16 @@ func applyPaymasterPostOpFrame(vpr *ValidationPhaseResult, executionResult *Exec
 	return paymasterPostOpResult, nil
 }
 
-func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config, payment *common.Address, prepaidGas *uint256.Int) (*ExecutionResult, *ExecutionResult, uint64, error) {
+func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhaseResult, bc ChainContext, author *common.Address, gp *GasPool, statedb *state.StateDB, header *types.Header, cfg vm.Config) (*ExecutionResult, *ExecutionResult, uint64, error) {
 	// revert back here if postOp fails
 	var snapshot = statedb.Snapshot()
+
 	blockContext := NewEVMBlockContext(header, bc, author, config, statedb)
 	message, err := TransactionToMessage(vpr.Tx, types.MakeSigner(config, header.Number, header.Time), header.BaseFee)
 	txContext := NewEVMTxContext(message)
 	txContext.Origin = *vpr.Tx.Rip7560TransactionData().Sender
 	evm := vm.NewEVM(blockContext, txContext, statedb, config, cfg)
+
 	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
 	executionResult, err := ApplyMessage(evm, accountExecutionMsg, gp)
 	if err != nil {
@@ -388,14 +464,14 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 		}
 	}
 
-	cumulativeGasUsed :=
+	gasUsed :=
 		vpr.NonceValidationUsedGas +
 			vpr.ValidationUsedGas +
 			vpr.DeploymentUsedGas +
 			vpr.PmValidationUsedGas +
 			executionResult.UsedGas
 	if paymasterPostOpResult != nil {
-		cumulativeGasUsed +=
+		gasUsed +=
 			paymasterPostOpResult.UsedGas
 	}
 
@@ -406,19 +482,19 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if err != nil {
 		return nil, nil, 0, err
 	}
-	cumulativeGasUsed += intrGas
+	gasUsed += intrGas
 
 	// apply a penalty && refund gas
 	// TODO: If this value is not persistent, it should be modified to be managed on-chain config
 	const UNUSED_GAS_PENALTY_PERCENT = 10
 	//gasPenalty := (prepaidGas.Uint64() - cumulativeGasUsed) * UNUSED_GAS_PENALTY_PERCENT / 100
 	var gasPenalty uint64 = 0
-	cumulativeGasUsed += gasPenalty
-	statedb.AddBalance(*payment, uint256.NewInt((prepaidGas.Uint64()-cumulativeGasUsed)*evm.Context.BaseFee.Uint64()))
-	gp.AddGas(prepaidGas.Uint64() - cumulativeGasUsed)
+	gasUsed += gasPenalty
+
+	refundPayer(vpr, statedb, gasUsed, gp)
 
 	// payments for rollup gas expenses to recipients
-	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(cumulativeGasUsed), evm.Context.BaseFee)
+	gasCost := new(big.Int).Mul(new(big.Int).SetUint64(gasUsed), evm.Context.BaseFee)
 	amtU256, overflow := uint256.FromBig(gasCost)
 	if overflow {
 		return nil, nil, 0, fmt.Errorf("optimism gas cost overflows U256: %d", gasCost)
@@ -436,9 +512,9 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	if paymasterPostOpResult != nil {
 		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
 	}
-	log.Info("[RIP-7560] Execution gas info", "cumulativeGasUsed", cumulativeGasUsed)
+	log.Info("[RIP-7560] Execution gas info", "gasUsed", gasUsed)
 
-	return executionResult, paymasterPostOpResult, cumulativeGasUsed, nil
+	return executionResult, paymasterPostOpResult, gasUsed, nil
 }
 
 func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
@@ -475,7 +551,7 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 
 func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfig, nonceValidationUsedGas uint64) *Message {
 	tx := baseTx.Rip7560TransactionData()
-	if tx.Deployer == nil {
+	if tx.Deployer == nil || tx.Deployer.Cmp(common.Address{}) == 0 {
 		return nil
 	}
 	return &Message{
@@ -604,55 +680,31 @@ func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, 
 	if len(data) != 32 {
 		return 0, 0, errors.New("invalid account return data length")
 	}
-	magicExpected := common.Bytes2Hex(data[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_SENDER[:]) {
-		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
+	magicExpected, validUntil, validAfter := UnpackValidationData(data)
+	//todo: we check first 8 bytes of the 20-byte address (the rest is expected to be zeros)
+	if magicExpected != MAGIC_VALUE_SENDER {
+		if magicExpected == MAGIC_VALUE_SIGFAIL {
 			if !estimateFlag {
-				return 0, 0, errors.New("account return MAGIC_VALUE_SIGFAIL")
+				return 0, 0, errors.New("account signature error")
 			}
 		}
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")
 	}
-	validUntil := binary.BigEndian.Uint64(data[4:12])
-	validAfter := binary.BigEndian.Uint64(data[12:20])
 	return validAfter, validUntil, nil
 }
 
 func validatePaymasterReturnData(data []byte, estimateFlag bool) ([]byte, uint64, uint64, error) {
-	jsondata := `[
-		{"type": "function","name": "validatePaymasterTransaction","outputs": [{"name": "validationData","type": "bytes32"},{"name": "context","type": "bytes"}]}
-	]`
-	validatePaymasterTransactionAbi, err := abi.JSON(strings.NewReader(jsondata))
-	if err != nil {
-		// todo: wrap error message
-		return nil, 0, 0, err
+	if len(data) < 32 {
+		return nil, 0, 0, errors.New("invalid paymaster return data length")
 	}
-
-	var validatePaymasterResult struct {
-		ValidationData [32]byte
-		Context        []byte
-	}
-
-	err = validatePaymasterTransactionAbi.UnpackIntoInterface(&validatePaymasterResult, "validatePaymasterTransaction", data)
+	validationData, context, err := UnpackPaymasterValidationReturn(data)
 	if err != nil {
 		return nil, 0, 0, err
 	}
-	if len(validatePaymasterResult.Context) > MaxContextSize {
-		return nil, 0, 0, errors.New("paymaster returned context size too large")
-	}
-	magicExpected := common.Bytes2Hex(validatePaymasterResult.ValidationData[:20])
-	if magicExpected != common.Bytes2Hex(MAGIC_VALUE_PAYMASTER[:]) {
-		if magicExpected == common.Bytes2Hex(MAGIC_VALUE_SIGFAIL[:]) {
-			if !estimateFlag {
-				return nil, 0, 0, errors.New("paymaster return MAGIC_VALUE_SIGFAIL")
-			}
-		}
+	magicExpected, validUntil, validAfter := UnpackValidationData(validationData)
+	if magicExpected != MAGIC_VALUE_PAYMASTER {
 		return nil, 0, 0, errors.New("paymaster did not return correct MAGIC_VALUE")
 	}
-	validUntil := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[4:12])
-	validAfter := binary.BigEndian.Uint64(validatePaymasterResult.ValidationData[12:20])
-	context := validatePaymasterResult.Context
-
 	return context, validAfter, validUntil, nil
 }
 
