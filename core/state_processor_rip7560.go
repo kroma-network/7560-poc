@@ -102,7 +102,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 		transactions = transactions[1:]
 	}
 
-	for i, tx := range transactions[index:] {
+	for _, tx := range transactions[index:] {
 		if tx.Type() != types.Rip7560Type {
 			break
 		}
@@ -115,7 +115,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 			prevGas  = gp.Gas()
 		)
 
-		statedb.SetTxContext(tx.Hash(), index+i)
+		statedb.SetTxContext(tx.Hash(), index+len(validatedTransactions))
 		var vpr *ValidationPhaseResult
 		log.Info("[RIP-7560] Validation Phase - Validation")
 		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
@@ -135,7 +135,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	// This is the line separating the Validation and Execution phases
 	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
-		statedb.SetTxContext(vpr.Tx.Hash(), i)
+		statedb.SetTxContext(vpr.Tx.Hash(), index+i)
 		log.Info("[RIP-7560] Execution Phase", "i", i)
 		executionResult, paymasterPostOpResult, gasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg)
 
