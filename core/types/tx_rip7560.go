@@ -58,9 +58,10 @@ func (tx *Rip7560AccountAbstractionTx) isSystemTx() bool { return false }
 // copy creates a deep copy of the transaction data and initializes all fields.
 func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 	cpy := &Rip7560AccountAbstractionTx{
-		To:   copyAddressPtr(tx.To),
-		Data: common.CopyBytes(tx.Data),
-		Gas:  tx.Gas,
+		To:    copyAddressPtr(tx.To),
+		Data:  common.CopyBytes(tx.Data),
+		Gas:   tx.Gas,
+		Nonce: tx.Nonce,
 		// These are copied below.
 		AccessList: make(AccessList, len(tx.AccessList)),
 		Value:      new(big.Int),

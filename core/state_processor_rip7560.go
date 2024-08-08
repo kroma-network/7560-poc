@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -255,10 +254,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
 	}
-	err := CheckNonceRip7560(tx.Rip7560TransactionData(), statedb)
-	if err != nil {
-		return nil, err
-	}
 	log.Info("[RIP-7560] Validation Phase - BuyGas")
 
 	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
@@ -282,8 +277,11 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	evm := vm.NewEVM(blockContext, txContext, statedb, chainConfig, cfg)
 
 	/*** Nonce Validation Frame ***/
-	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	var nonceValidationUsedGas uint64
+	var nonceValidationMsg *Message
+	if bigNonce := tx.Rip7560TransactionData().BigNonce; bigNonce.Cmp(big.NewInt(0)) != 0 {
+		nonceValidationMsg = prepareNonceValidationMessage(tx, chainConfig)
+	}
 	if nonceValidationMsg != nil {
 		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "2D-nonce")
 		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
@@ -297,6 +295,10 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		}
 		nonceValidationUsedGas = resultNonceManager.UsedGas
 	} else {
+		err := CheckNonceRip7560(tx.Rip7560TransactionData(), statedb)
+		if err != nil {
+			return nil, err
+		}
 		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "legacy-nonce")
 		// Use legacy nonce validation
 		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
@@ -521,11 +523,6 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 	key := make([]byte, 32)
 	fromBig, _ := uint256.FromBig(tx.BigNonce)
 	fromBig.WriteToSlice(key)
-
-	// Use legacy nonce validation if the key is all zeros
-	if bytes.Equal(key[:24], make([]byte, 24)) {
-		return nil
-	}
 
 	nonceValidationData := make([]byte, 0)
 	nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
