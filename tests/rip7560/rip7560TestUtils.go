@@ -75,6 +75,7 @@ func (tb *testContextBuilder) build() *testContext {
 	genesis := core.DeveloperGenesisBlock(100_000_000, &common.Address{})
 	genesis.Timestamp = 100
 	genesis.Config.Optimism = &params.OptimismConfig{EIP1559Elasticity: 50, EIP1559Denominator: 10}
+	// TODO: fill the necessary addresses at the chainConfig for NonceManager test
 	genesisBlock := genesis.ToBlock()
 	gaspool := new(core.GasPool).AddGas(genesisBlock.GasLimit())
 
