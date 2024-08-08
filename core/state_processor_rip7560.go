@@ -8,7 +8,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/state"
 	"github.com/ethereum/go-ethereum/core/types"
 	"github.com/ethereum/go-ethereum/core/vm"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/params"
 	"github.com/holiman/uint256"
 	"math/big"
@@ -79,7 +78,6 @@ func HandleRip7560Transactions(transactions []*types.Transaction, index int, sta
 
 	iTransactions, iReceipts, iLogs, err := handleRip7560Transactions(transactions, index, statedb, coinbase, header, gp, chainConfig, bc, cfg)
 	if err != nil {
-		log.Error("Failed to handleRip7560Transactions", "err", err)
 		return nil, nil, nil, err
 	}
 	validatedTransactions = append(validatedTransactions, iTransactions...)
@@ -116,10 +114,8 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 
 		statedb.SetTxContext(tx.Hash(), index+len(validatedTransactions))
 		var vpr *ValidationPhaseResult
-		log.Info("[RIP-7560] Validation Phase - Validation")
 		vpr, err := ApplyRip7560ValidationPhases(chainConfig, bc, coinbase, gp, statedb, header, tx, cfg)
 		if err != nil {
-			log.Warn("[RIP-7560] Failed to ApplyRip7560ValidationPhases", "err", err)
 			// If an error occurs in the validation phase, invalidate the transaction
 			statedb.RevertToSnapshot(snapshot)
 			gp.SetGas(prevGas)
@@ -135,7 +131,6 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 	for i, vpr := range validationPhaseResults {
 		// TODO: this will miss all validation phase events - pass in 'vpr'
 		statedb.SetTxContext(vpr.Tx.Hash(), index+i)
-		log.Info("[RIP-7560] Execution Phase", "i", i)
 		executionResult, paymasterPostOpResult, gasUsed, err := ApplyRip7560ExecutionPhase(chainConfig, vpr, bc, coinbase, gp, statedb, header, cfg)
 
 		root := statedb.IntermediateRoot(true).Bytes()
@@ -254,7 +249,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
 	}
-	log.Info("[RIP-7560] Validation Phase - BuyGas")
 
 	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
 	if gasPrice.Cmp(tx.GasFeeCap()) > 0 {
@@ -264,7 +258,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 
 	preCharge, err := BuyGasRip7560Transaction(chainConfig, gp, header, tx, statedb, gasPriceUint256)
 	if err != nil {
-		log.Warn("[RIP-7560] Failed to BuyGasRip7560Transaction", "err", err)
 		return nil, err
 	}
 
@@ -283,14 +276,11 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		nonceValidationMsg = prepareNonceValidationMessage(tx, chainConfig)
 	}
 	if nonceValidationMsg != nil {
-		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "2D-nonce")
 		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
 		if err != nil {
-			log.Error("[RIP-7560] Nonce Validation Frame", "ApplyMessage.Err", err)
 			return nil, err
 		}
 		if resultNonceManager.Err != nil {
-			log.Error("[RIP-7560] Nonce Validation Frame", "resultNonceManager.Err", resultNonceManager.Err)
 			return nil, resultNonceManager.Err
 		}
 		nonceValidationUsedGas = resultNonceManager.UsedGas
@@ -299,7 +289,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		if err != nil {
 			return nil, err
 		}
-		log.Info("[RIP-7560] Nonce Validation Frame", "nonceType", "legacy-nonce")
 		// Use legacy nonce validation
 		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
 		if stNonce != 0 {
@@ -326,7 +315,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 			err = errors.New("sender not deployed")
 		}
 		if err != nil {
-			log.Error("[RIP-7560] Deployer Frame", "err", err)
 			return nil, fmt.Errorf("account deployment failed: %v", err)
 		}
 		// TODO : would be handled inside IntrinsicGas
@@ -339,28 +327,23 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	accountValidationMsg, err := prepareAccountValidationMessage(tx, chainConfig, signingHash, nonceValidationUsedGas, deploymentUsedGas)
 	resultAccountValidation, err := ApplyMessage(evm, accountValidationMsg, gp)
 	if err != nil {
-		log.Error("[RIP-7560] Account Validation Frame", "ApplyMessage.Err", err)
 		return nil, err
 	}
 	if resultAccountValidation.Err != nil {
-		log.Error("[RIP-7560] Account Validation Frame", "resultAccountValidation.Err", resultAccountValidation.Err)
 		return nil, resultAccountValidation.Err
 	}
 	validAfter, validUntil, err := validateAccountReturnData(resultAccountValidation.ReturnData, estimateFlag)
 	if err != nil {
-		log.Error("[RIP-7560] Account Validation Frame", "validateAccountReturnData.Err", err)
 		return nil, err
 	}
 	err = validateValidityTimeRange(header.Time, validAfter, validUntil)
 	if err != nil {
-		log.Error("[RIP-7560] Account Validation Frame", "validateValidityTimeRange.Err", err)
 		return nil, err
 	}
 
 	/*** Paymaster Validation Frame ***/
 	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, estimateFlag)
 	if err != nil {
-		log.Error("[RIP-7560] Paymaster Validation Frame", "err", err)
 		return nil, err
 	}
 	vpr := &ValidationPhaseResult{
@@ -378,7 +361,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		PmValidAfter:           pmValidAfter,
 		PmValidUntil:           pmValidUntil,
 	}
-	log.Info("[RIP-7560] ValidationPhaseResult", "vpr", vpr)
 
 	return vpr, nil
 }
@@ -390,13 +372,11 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 	var pmValidUntil uint64
 	paymasterMsg, err := preparePaymasterValidationMessage(tx, chainConfig, signingHash)
 	if err != nil {
-		log.Error("[RIP-7560] Paymaster Validation Frame", "preparePaymasterValidationMessage.err", err)
 		return nil, 0, 0, 0, err
 	}
 	if paymasterMsg != nil {
 		resultPm, err := ApplyMessage(evm, paymasterMsg, gp)
 		if err != nil {
-			log.Error("[RIP-7560] Paymaster Validation Frame", "ApplyMessage.err", err)
 			return nil, 0, 0, 0, err
 		}
 		if resultPm.Failed() {
@@ -405,12 +385,10 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 		pmValidationUsedGas = resultPm.UsedGas
 		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData, estimateFlag)
 		if err != nil {
-			log.Error("[RIP-7560] Paymaster Validation Frame", "validatePaymasterReturnData.err", err)
 			return nil, 0, 0, 0, err
 		}
 		err = validateValidityTimeRange(header.Time, pmValidAfter, pmValidUntil)
 		if err != nil {
-			log.Error("[RIP-7560] Paymaster Validation Frame", "validateValidityTimeRange.err", err)
 			return nil, 0, 0, 0, err
 		}
 	}
@@ -444,21 +422,17 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 	accountExecutionMsg := prepareAccountExecutionMessage(vpr.Tx, evm.ChainConfig())
 	executionResult, err := ApplyMessage(evm, accountExecutionMsg, gp)
 	if err != nil {
-		log.Error("[RIP-7560] Execution Frame", "ApplyMessage.Err", err)
 		return nil, nil, 0, err
 	}
-	log.Info("[RIP-7560] Execution gas info", "executionResult.UsedGas", executionResult.UsedGas)
 
 	var paymasterPostOpResult *ExecutionResult
 	if len(vpr.PaymasterContext) != 0 {
 		paymasterPostOpResult, err = applyPaymasterPostOpFrame(vpr, executionResult, evm, gp)
 		if err != nil {
-			log.Error("[RIP-7560] Post-transaction Frame", "applyPaymasterPostOpFrame.err", err)
 			return nil, nil, 0, err
 		}
 		// revert the execution phase changes
 		if paymasterPostOpResult.Failed() {
-			log.Warn("[RIP-7560] Post-transaction Frame - reverted", "paymasterPostOpResult", paymasterPostOpResult)
 			statedb.RevertToSnapshot(snapshot)
 		}
 	}
@@ -506,12 +480,6 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 		}
 		statedb.AddBalance(params.OptimismL1FeeRecipient, amtU256)
 	}
-
-	log.Info("[RIP-7560] Execution gas info", "vpr.NonceValidationUsedGas", vpr.NonceValidationUsedGas, "vpr.ValidationUsedGas", vpr.ValidationUsedGas, "vpr.DeploymentUsedGas", vpr.DeploymentUsedGas, "vpr.PmValidationUsedGas", vpr.PmValidationUsedGas, "executionResult.UsedGas", executionResult.UsedGas, "IntrinsicGas", intrGas, "gasPenalty", gasPenalty)
-	if paymasterPostOpResult != nil {
-		log.Info("[RIP-7560] Execution gas info", "paymasterPostOpResult.UsedGas", paymasterPostOpResult.UsedGas)
-	}
-	log.Info("[RIP-7560] Execution gas info", "gasUsed", gasUsed)
 
 	return executionResult, paymasterPostOpResult, gasUsed, nil
 }
