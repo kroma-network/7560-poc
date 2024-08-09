@@ -29,9 +29,9 @@ func PackValidationData(authorizerMagic uint64, validUntil, validAfter uint64) [
 }
 
 func UnpackValidationData(validationData []byte) (uint64, uint64, uint64) {
-	authorizerMagic := new(big.Int).SetBytes(validationData[:20]).Uint64()
-	validUntil := new(big.Int).SetBytes(validationData[20:26]).Uint64()
-	validAfter := new(big.Int).SetBytes(validationData[26:32]).Uint64()
+	validAfter := new(big.Int).SetBytes(validationData[:6]).Uint64()
+	validUntil := new(big.Int).SetBytes(validationData[6:12]).Uint64()
+	authorizerMagic := new(big.Int).SetBytes(validationData[12:32]).Uint64()
 	return authorizerMagic, validUntil, validAfter
 }
 
@@ -192,8 +192,8 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	L1CostFunc := types.NewL1CostFunc(chainConfig, state)
 	if L1CostFunc != nil {
 		l1Cost = L1CostFunc(tx.RollupCostData(), header.Time)
+		preCharge = preCharge.Add(preCharge, new(uint256.Int).SetUint64(l1Cost.Uint64()))
 	}
-	preCharge = preCharge.Add(preCharge, new(uint256.Int).SetUint64(l1Cost.Uint64()))
 
 	balanceCheck := new(uint256.Int).Set(preCharge)
 
@@ -313,21 +313,19 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		var resultDeployer *ExecutionResult
 		if statedb.GetCodeSize(*sender) != 0 {
 			err = errors.New("sender already deployed")
-		} else if statedb.GetCodeSize(*deployerMsg.To) == 0 {
-			err = errors.New("deployer not exist")
 		} else {
 			resultDeployer, err = ApplyMessage(evm, deployerMsg, gp)
-			deployedAddr := common.BytesToAddress(resultDeployer.ReturnData)
-			log.Info("[RIP-7560]", "deployedAddr", deployedAddr.Hex())
-			if resultDeployer.Failed() || statedb.GetCodeSize(*sender) == 0 {
-				err = errors.New("account deployment failed - invalid transaction")
-			} else if deployedAddr != *tx.Rip7560TransactionData().Sender {
-				err = errors.New("deployed address mismatch - invalid transaction")
-			}
+		}
+		if err == nil && resultDeployer != nil {
+			err = resultDeployer.Err
+			deploymentUsedGas = resultDeployer.UsedGas
+		}
+		if err == nil && statedb.GetCodeSize(*sender) == 0 {
+			err = errors.New("sender not deployed")
 		}
 		if err != nil {
 			log.Error("[RIP-7560] Deployer Frame", "err", err)
-			return nil, err
+			return nil, fmt.Errorf("account deployment failed: %v", err)
 		}
 		// TODO : would be handled inside IntrinsicGas
 		deploymentUsedGas = resultDeployer.UsedGas + params.TxGasContractCreation
@@ -361,6 +359,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	paymasterContext, pmValidationUsedGas, pmValidAfter, pmValidUntil, err := applyPaymasterValidationFrame(tx, chainConfig, signingHash, evm, gp, statedb, header, estimateFlag)
 	if err != nil {
 		log.Error("[RIP-7560] Paymaster Validation Frame", "err", err)
+		return nil, err
 	}
 	vpr := &ValidationPhaseResult{
 		Tx:                     tx,
@@ -391,7 +390,6 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 	if err != nil {
 		log.Error("[RIP-7560] Paymaster Validation Frame", "preparePaymasterValidationMessage.err", err)
 		return nil, 0, 0, 0, err
-
 	}
 	if paymasterMsg != nil {
 		resultPm, err := ApplyMessage(evm, paymasterMsg, gp)
@@ -399,9 +397,8 @@ func applyPaymasterValidationFrame(tx *types.Transaction, chainConfig *params.Ch
 			log.Error("[RIP-7560] Paymaster Validation Frame", "ApplyMessage.err", err)
 			return nil, 0, 0, 0, err
 		}
-		statedb.IntermediateRoot(true)
 		if resultPm.Failed() {
-			return nil, 0, 0, 0, errors.New("paymaster validation failed - invalid transaction")
+			return nil, 0, 0, 0, resultPm.Err
 		}
 		pmValidationUsedGas = resultPm.UsedGas
 		paymasterContext, pmValidAfter, pmValidUntil, err = validatePaymasterReturnData(resultPm.ReturnData, estimateFlag)

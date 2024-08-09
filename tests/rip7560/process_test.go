@@ -11,7 +11,6 @@ import (
 	"github.com/ethereum/go-ethereum/core/vm"
 	"github.com/ethereum/go-ethereum/crypto"
 	"github.com/ethereum/go-ethereum/ethdb"
-	"github.com/ethereum/go-ethereum/log"
 	"github.com/ethereum/go-ethereum/tests"
 	"github.com/ethereum/go-ethereum/trie"
 	"github.com/stretchr/testify/assert"
@@ -36,9 +35,8 @@ const privKey2 = "59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b7869
 
 // initial minimal test that a valid AATX can be processed in a block
 func TestProcess1(t *testing.T) {
-
 	Sender := common.HexToAddress(DEFAULT_SENDER)
-	runProcess(newTestContextBuilder(t).
+	err := runProcess(newTestContextBuilder(t).
 		withAccount(addr1, 100000000000000).
 		withCode(DEFAULT_SENDER, createAccountCode(), 1000000000000000000).
 		build(), []*types.Rip7560AccountAbstractionTx{
@@ -49,18 +47,17 @@ func TestProcess1(t *testing.T) {
 			Data:          []byte{1, 2, 3},
 		},
 	})
+	assert.NoError(t, err)
 }
 
 // run a set of AA transactions, with a legacy TXs before and after.
 func runProcess(t *testContext, aatxs []*types.Rip7560AccountAbstractionTx) error {
-	//t.chainConfig = params.OptimismTestConfig
 	var db ethdb.Database = rawdb.NewMemoryDatabase()
 	var state = tests.MakePreState(db, t.genesisAlloc, false, rawdb.HashScheme)
 	defer state.Close()
+
 	cacheConfig := &core.CacheConfig{}
 	chainOverrides := core.ChainOverrides{}
-	log.Info("isOptimismEnabled", "isOptimismEnabled", cacheConfig)
-
 	engine := beacon.New(ethash.NewFaker())
 	lookupLimit := uint64(0)
 	blockchain, err := core.NewBlockChain(db, cacheConfig, t.genesis, &chainOverrides, engine,
