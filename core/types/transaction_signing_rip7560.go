@@ -32,7 +32,7 @@ func (s rip7560Signer) Hash(tx *Transaction) common.Hash {
 		tx.Type(),
 		[]interface{}{
 			s.chainId,
-			tx.Nonce(),
+			aatx.BigNonce,
 			aatx.Sender,
 			aatx.Deployer,
 			aatx.DeployerData,
@@ -47,6 +47,5 @@ func (s rip7560Signer) Hash(tx *Transaction) common.Hash {
 			aatx.PostOpGas,
 			tx.Gas(),
 			tx.AccessList(),
-			aatx.BigNonce,
 		})
 }

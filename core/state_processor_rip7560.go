@@ -1,6 +1,7 @@
 package core
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -231,7 +232,7 @@ func refundPayer(vpr *ValidationPhaseResult, state vm.StateDB, gasUsed uint64, g
 func CheckNonceRip7560(tx *types.Rip7560AccountAbstractionTx, st *state.StateDB) error {
 	// Make sure this transaction's nonce is correct.
 	stNonce := st.GetNonce(*tx.Sender)
-	if msgNonce := tx.Nonce; stNonce < msgNonce {
+	if msgNonce := tx.BigNonce.Uint64(); stNonce < msgNonce {
 		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooHigh,
 			tx.Sender.Hex(), msgNonce, stNonce)
 	} else if stNonce > msgNonce {
@@ -271,10 +272,7 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 
 	/*** Nonce Validation Frame ***/
 	var nonceValidationUsedGas uint64
-	var nonceValidationMsg *Message
-	if bigNonce := tx.Rip7560TransactionData().BigNonce; bigNonce.Cmp(big.NewInt(0)) != 0 {
-		nonceValidationMsg = prepareNonceValidationMessage(tx, chainConfig)
-	}
+	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 	if nonceValidationMsg != nil {
 		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
 		if err != nil {
@@ -495,6 +493,11 @@ func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *param
 	nonceValidationData := make([]byte, 0)
 	nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
 	nonceValidationData = append(nonceValidationData[:], key...)
+
+	// Use legacy nonce validation if the key is all zeros
+	if bytes.Equal(key[:24], make([]byte, 24)) {
+		return nil
+	}
 
 	return &Message{
 		From:              chainConfig.EntryPointAddress,
