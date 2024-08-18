@@ -649,8 +649,8 @@ func validateAccountReturnData(data []byte, estimateFlag bool) (uint64, uint64, 
 	//todo: we check first 8 bytes of the 20-byte address (the rest is expected to be zeros)
 	if magicExpected != MAGIC_VALUE_SENDER {
 		if magicExpected == MAGIC_VALUE_SIGFAIL {
-			if !estimateFlag {
-				return 0, 0, errors.New("account signature error")
+			if estimateFlag {
+				return validAfter, validUntil, nil
 			}
 		}
 		return 0, 0, errors.New("account did not return correct MAGIC_VALUE")

@@ -14,7 +14,7 @@ func NewRIP7560Signer(chainId *big.Int) Signer {
 func (s rip7560Signer) Sender(tx *Transaction) (common.Address, error) {
 	if tx.Type() == Rip7560Type {
 		return *tx.Rip7560TransactionData().Sender, nil
-	} else if tx.Type() != Rip7560BundleHeaderType {
+	} else if tx.Type() == Rip7560BundleHeaderType {
 		return [20]byte{}, nil
 	} else {
 		return s.londonSigner.Sender(tx)
