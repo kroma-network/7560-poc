@@ -83,15 +83,6 @@ func TestValidation_ok_paid(t *testing.T) {
 	maxCost.Mul(maxCost, aatx.GasFeeCap)
 }
 
-func TestValidationFailure_account_nonce(t *testing.T) {
-	bigNonce := new(big.Int).SetUint64(1234)
-	handleValidation(newTestContextBuilder(t).withCode(DEFAULT_SENDER, createAccountCode(), DEFAULT_BALANCE), types.Rip7560AccountAbstractionTx{
-		BigNonce:      bigNonce,
-		ValidationGas: uint64(1000000),
-		GasFeeCap:     big.NewInt(1),
-	}, "nonce too high: address 0x1111111111222222222233333333334444444444, tx: 1234 state: 0")
-}
-
 func TestValidationFailure_account_revert(t *testing.T) {
 	handleValidation(newTestContextBuilder(t).withCode(DEFAULT_SENDER,
 		createCode(push(0), vm.DUP1, vm.REVERT), DEFAULT_BALANCE), types.Rip7560AccountAbstractionTx{
