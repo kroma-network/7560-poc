@@ -14,7 +14,7 @@ import (
 var _ = (*callFrameMarshaling)(nil)
 
 // MarshalJSON marshals as JSON.
-func (c callFrame) MarshalJSON() ([]byte, error) {
+func (c CallFrame) MarshalJSON() ([]byte, error) {
 	type callFrame0 struct {
 		Type         vm.OpCode       `json:"-"`
 		From         common.Address  `json:"from"`
@@ -25,7 +25,7 @@ func (c callFrame) MarshalJSON() ([]byte, error) {
 		Output       hexutil.Bytes   `json:"output,omitempty" rlp:"optional"`
 		Error        string          `json:"error,omitempty" rlp:"optional"`
 		RevertReason string          `json:"revertReason,omitempty"`
-		Calls        []callFrame     `json:"calls,omitempty" rlp:"optional"`
+		Calls        []CallFrame     `json:"calls,omitempty" rlp:"optional"`
 		Logs         []callLog       `json:"logs,omitempty" rlp:"optional"`
 		Value        *hexutil.Big    `json:"value,omitempty" rlp:"optional"`
 		TypeString   string          `json:"type"`
@@ -48,7 +48,7 @@ func (c callFrame) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON unmarshals from JSON.
-func (c *callFrame) UnmarshalJSON(input []byte) error {
+func (c *CallFrame) UnmarshalJSON(input []byte) error {
 	type callFrame0 struct {
 		Type         *vm.OpCode      `json:"-"`
 		From         *common.Address `json:"from"`
@@ -59,7 +59,7 @@ func (c *callFrame) UnmarshalJSON(input []byte) error {
 		Output       *hexutil.Bytes  `json:"output,omitempty" rlp:"optional"`
 		Error        *string         `json:"error,omitempty" rlp:"optional"`
 		RevertReason *string         `json:"revertReason,omitempty"`
-		Calls        []callFrame     `json:"calls,omitempty" rlp:"optional"`
+		Calls        []CallFrame     `json:"calls,omitempty" rlp:"optional"`
 		Logs         []callLog       `json:"logs,omitempty" rlp:"optional"`
 		Value        *hexutil.Big    `json:"value,omitempty" rlp:"optional"`
 	}
