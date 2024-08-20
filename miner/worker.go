@@ -1174,9 +1174,8 @@ func (w *worker) fillTransactions(interrupt *atomic.Int32, env *environment) err
 		}
 	}
 
-
 	pendingBundle, err := w.eth.TxPool().PendingRip7560Bundle()
-	if pendingBundle != nil {
+	if pendingBundle != nil && len(pendingBundle.Transactions) > 0 {
 		if err = w.commitRip7560TransactionsBundle(env, pendingBundle, interrupt); err != nil {
 			return err
 		}

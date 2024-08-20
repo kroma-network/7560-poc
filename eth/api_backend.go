@@ -47,6 +47,7 @@ import (
 
 // EthAPIBackend implements ethapi.Backend and tracers.Backend for full nodes
 type EthAPIBackend struct {
+	rip7560AcceptPush   bool
 	extRPCEnabled       bool
 	allowUnprotectedTxs bool
 	disableTxPool       bool
