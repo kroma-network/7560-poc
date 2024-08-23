@@ -67,6 +67,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 		RollupDisableTxPoolGossip               bool
 		RollupDisableTxPoolAdmission            bool
 		RollupHaltOnIncompatibleProtocolVersion string
+		Rip7560MaxBundleGas                     *uint64 `toml:",omitempty"`
+		Rip7560MaxBundleSize                    *uint64 `toml:",omitempty"`
+		Rip7560PullUrls                         []string
+		Rip7560AcceptPush                       bool `toml:",omitempty"`
 	}
 	var enc Config
 	enc.Genesis = c.Genesis
@@ -119,6 +123,10 @@ func (c Config) MarshalTOML() (interface{}, error) {
 	enc.RollupDisableTxPoolGossip = c.RollupDisableTxPoolGossip
 	enc.RollupDisableTxPoolAdmission = c.RollupDisableTxPoolAdmission
 	enc.RollupHaltOnIncompatibleProtocolVersion = c.RollupHaltOnIncompatibleProtocolVersion
+	enc.Rip7560MaxBundleGas = c.Rip7560MaxBundleGas
+	enc.Rip7560MaxBundleSize = c.Rip7560MaxBundleSize
+	enc.Rip7560PullUrls = c.Rip7560PullUrls
+	enc.Rip7560AcceptPush = c.Rip7560AcceptPush
 	return &enc, nil
 }
 
@@ -175,6 +183,10 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 		RollupDisableTxPoolGossip               *bool
 		RollupDisableTxPoolAdmission            *bool
 		RollupHaltOnIncompatibleProtocolVersion *string
+		Rip7560MaxBundleGas                     *uint64 `toml:",omitempty"`
+		Rip7560MaxBundleSize                    *uint64 `toml:",omitempty"`
+		Rip7560PullUrls                         []string
+		Rip7560AcceptPush                       *bool `toml:",omitempty"`
 	}
 	var dec Config
 	if err := unmarshal(&dec); err != nil {
@@ -329,6 +341,18 @@ func (c *Config) UnmarshalTOML(unmarshal func(interface{}) error) error {
 	}
 	if dec.RollupHaltOnIncompatibleProtocolVersion != nil {
 		c.RollupHaltOnIncompatibleProtocolVersion = *dec.RollupHaltOnIncompatibleProtocolVersion
+	}
+	if dec.Rip7560MaxBundleGas != nil {
+		c.Rip7560MaxBundleGas = dec.Rip7560MaxBundleGas
+	}
+	if dec.Rip7560MaxBundleSize != nil {
+		c.Rip7560MaxBundleSize = dec.Rip7560MaxBundleSize
+	}
+	if dec.Rip7560PullUrls != nil {
+		c.Rip7560PullUrls = dec.Rip7560PullUrls
+	}
+	if dec.Rip7560AcceptPush != nil {
+		c.Rip7560AcceptPush = *dec.Rip7560AcceptPush
 	}
 	return nil
 }

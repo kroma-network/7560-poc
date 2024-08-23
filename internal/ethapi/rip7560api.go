@@ -26,7 +26,7 @@ type Rip7560UsedGas struct {
 	ExecutionGas  hexutil.Uint64 `json:"executionGas"`
 }
 
-func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args []TransactionArgs, creationBlock *big.Int, expectedRevenue *big.Int, bundlerId string) (common.Hash, error) {
+func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args []TransactionArgs, creationBlock *big.Int, bundlerId string) (common.Hash, error) {
 	if len(args) == 0 {
 		return common.Hash{}, errors.New("submitted bundle has zero length")
 	}
@@ -36,12 +36,11 @@ func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args
 		txs[i] = args[i].toTransaction()
 	}
 	bundle := &types.ExternallyReceivedBundle{
-		BundlerId:       bundlerId,
-		ExpectedRevenue: expectedRevenue,
-		ValidForBlock:   creationBlock,
-		Transactions:    txs,
+		BundlerId:     bundlerId,
+		ValidForBlock: creationBlock,
+		Transactions:  txs,
 	}
-	bundleHash := calculateBundleHash(txs)
+	bundleHash := CalculateBundleHash(txs)
 	bundle.BundleHash = bundleHash
 	err := SubmitRip7560Bundle(ctx, s.b, bundle)
 	if err != nil {
@@ -231,7 +230,7 @@ func (s *BlockChainAPI) EstimateRip7560TransactionGas(ctx context.Context, args 
 }
 
 // TODO: If this code is indeed necessary, keep it in utils; better - remove altogether.
-func calculateBundleHash(txs []*types.Transaction) common.Hash {
+func CalculateBundleHash(txs []*types.Transaction) common.Hash {
 	appendedTxIds := make([]byte, 0)
 	for _, tx := range txs {
 		txHash := tx.Hash()

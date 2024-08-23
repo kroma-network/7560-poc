@@ -246,7 +246,7 @@ func (t *flatCallTracer) isPrecompiled(addr common.Address) bool {
 	return false
 }
 
-func flatFromNested(input *callFrame, traceAddress []int, convertErrs bool, ctx *tracers.Context) (output []flatCallFrame, err error) {
+func flatFromNested(input *CallFrame, traceAddress []int, convertErrs bool, ctx *tracers.Context) (output []flatCallFrame, err error) {
 	var frame *flatCallFrame
 	switch input.Type {
 	case vm.CREATE, vm.CREATE2:
@@ -289,7 +289,7 @@ func flatFromNested(input *callFrame, traceAddress []int, convertErrs bool, ctx 
 	return output, nil
 }
 
-func newFlatCreate(input *callFrame) *flatCallFrame {
+func newFlatCreate(input *CallFrame) *flatCallFrame {
 	var (
 		actionInit = input.Input[:]
 		resultCode = input.Output[:]
@@ -311,7 +311,7 @@ func newFlatCreate(input *callFrame) *flatCallFrame {
 	}
 }
 
-func newFlatCall(input *callFrame) *flatCallFrame {
+func newFlatCall(input *CallFrame) *flatCallFrame {
 	var (
 		actionInput  = input.Input[:]
 		resultOutput = input.Output[:]
@@ -334,7 +334,7 @@ func newFlatCall(input *callFrame) *flatCallFrame {
 	}
 }
 
-func newFlatSelfdestruct(input *callFrame) *flatCallFrame {
+func newFlatSelfdestruct(input *CallFrame) *flatCallFrame {
 	return &flatCallFrame{
 		Type: "suicide",
 		Action: flatCallAction{

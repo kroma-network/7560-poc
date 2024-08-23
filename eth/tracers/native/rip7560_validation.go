@@ -25,7 +25,7 @@ func newRip7560Tracer(ctx *tracers.Context, cfg json.RawMessage) (tracers.Tracer
 		}
 	}
 	return &rip7560ValidationTracer{
-		calls:  make([]callFrame, 0),
+		calls:  make([]CallFrame, 0),
 		config: config,
 	}, nil
 }
@@ -76,7 +76,7 @@ type rip7560ValidationTracer struct {
 	currentLevel        *Level
 	topLevelCallCounter int
 	keccak              []string
-	calls               []callFrame
+	calls               []CallFrame
 	logs                []callLog
 	// debug?
 	lastOp           vm.OpCode
@@ -92,14 +92,14 @@ type Rip7560ValidationResult struct {
 	CallsFromEntryPoint []*Level    `json:"callsFromEntryPoint"`
 	Keccak              []string    `json:"keccak"`
 	Logs                []callLog   `json:"logs"`
-	Calls               []callFrame `json:"calls"`
+	Calls               []CallFrame `json:"calls"`
 	Debug               []string    `json:"debug"`
 }
 
 func (t *rip7560ValidationTracer) CaptureStart(env *vm.EVM, from common.Address, to common.Address, create bool, input []byte, gas uint64, value *big.Int) {
 	t.env = env
 	toCopy := to
-	t.calls = append(t.calls, callFrame{
+	t.calls = append(t.calls, CallFrame{
 		Type:  vm.CALL,
 		From:  from,
 		To:    &toCopy,
@@ -218,7 +218,7 @@ func (t *rip7560ValidationTracer) CaptureState(pc uint64, op vm.OpCode, gas, cos
 			if len(data) >= 4000 {
 				data = data[:4000]
 			}
-			t.calls = append(t.calls, callFrame{
+			t.calls = append(t.calls, CallFrame{
 				Type:    op,
 				GasUsed: 0,
 				Input:   data,
@@ -292,7 +292,7 @@ func (t *rip7560ValidationTracer) CaptureEnter(typ vm.OpCode, from common.Addres
 	}
 
 	toCopy := to
-	call := callFrame{
+	call := CallFrame{
 		Type:  typ,
 		From:  from,
 		To:    &toCopy,
