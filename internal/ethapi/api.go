@@ -1459,17 +1459,38 @@ type RPCTransaction struct {
 	// deposit-tx post-Canyon only
 	DepositReceiptVersion *hexutil.Uint64 `json:"depositReceiptVersion,omitempty"`
 
-	// RIP-7560-tx only
-	Sender           *common.Address `json:"sender,omitempty"`
-	Signature        hexutil.Bytes   `json:"signature,omitempty"`
-	PaymasterData    hexutil.Bytes   `json:"paymasterData,omitempty"`
-	DeployerData     hexutil.Bytes   `json:"deployerData,omitempty"`
-	BuilderFee       *hexutil.Big    `json:"builderFee,omitempty"`
-	ValidationGas    hexutil.Uint64  `json:"validationGas,omitempty"`
-	PaymasterGas     hexutil.Uint64  `json:"paymasterGas,omitempty"`
-	PostOpGas        hexutil.Uint64  `json:"postOpGas,omitempty"`
-	BigNonce         *hexutil.Big    `json:"bigNonce,omitempty"`
-	TransactionCount hexutil.Uint64  `json:"transactionCount,omitempty"`
+	// Introduced by RIP-7560 Transaction
+	Sender                      *common.Address `json:"sender,omitempty"`
+	AuthorizationData           *hexutil.Bytes  `json:"authorizationData,omitempty"`
+	ExecutionData               *hexutil.Bytes  `json:"executionData,omitempty"`
+	Paymaster                   *common.Address `json:"paymaster,omitempty"`
+	PaymasterData               *hexutil.Bytes  `json:"paymasterData,omitempty"`
+	Deployer                    *common.Address `json:"deployer,omitempty"`
+	DeployerData                *hexutil.Bytes  `json:"deployerData,omitempty"`
+	BuilderFee                  *hexutil.Big    `json:"builderFee,omitempty"`
+	ValidationGas               *hexutil.Uint64 `json:"verificationGasLimit,omitempty"`
+	PaymasterValidationGasLimit *hexutil.Uint64 `json:"paymasterVerificationGasLimit,omitempty"`
+	PostOpGas                   *hexutil.Uint64 `json:"paymasterPostOpGasLimit,omitempty"`
+
+	// Introduced by RIP-7711
+	TransactionCount hexutil.Uint64 `json:"transactionCount,omitempty"`
+
+	// Introduced by RIP-7712
+	NonceKey *hexutil.Big `json:"nonceKey,omitempty"`
+}
+
+func toBytes(data []byte) *hexutil.Bytes {
+	if len(data) == 0 {
+		return nil
+	}
+	return (*hexutil.Bytes)(&data)
+}
+
+func conditional_uint64(v uint64, addr *common.Address) *hexutil.Uint64 {
+	if addr == nil {
+		return nil
+	}
+	return (*hexutil.Uint64)(&v)
 }
 
 // newRPCTransaction returns a transaction that will serialize to the RPC
@@ -1566,21 +1587,38 @@ func newRPCTransaction(tx *types.Transaction, blockHash common.Hash, blockNumber
 		result.BlobVersionedHashes = tx.BlobHashes()
 
 	case types.Rip7560Type:
-		al := tx.AccessList()
-		result.Accesses = &al
+		rip7560Tx := tx.Rip7560TransactionData()
+		result.S = nil
+		result.R = nil
+		result.V = nil
+		result.To = nil
+		result.NonceKey = (*hexutil.Big)(rip7560Tx.NonceKey)
+		result.Input = make(hexutil.Bytes, 0)
+		result.Sender = rip7560Tx.Sender
+		result.AuthorizationData = toBytes(rip7560Tx.AuthorizationData)
+		result.ExecutionData = toBytes(rip7560Tx.ExecutionData)
+		result.Gas = hexutil.Uint64(tx.Gas())
+		result.Paymaster = rip7560Tx.Paymaster
+		result.PaymasterData = toBytes(rip7560Tx.PaymasterData)
+		result.Deployer = rip7560Tx.Deployer
+		result.DeployerData = toBytes(rip7560Tx.DeployerData)
+		result.BuilderFee = (*hexutil.Big)(rip7560Tx.BuilderFee)
+		result.ValidationGas = (*hexutil.Uint64)(&rip7560Tx.ValidationGasLimit)
+		result.PaymasterValidationGasLimit = conditional_uint64(rip7560Tx.PaymasterValidationGasLimit, rip7560Tx.Paymaster)
+		result.PostOpGas = conditional_uint64(rip7560Tx.PostOpGas, rip7560Tx.Paymaster)
+
+		//shared fields with DynamicFeeTxType
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
 		result.GasFeeCap = (*hexutil.Big)(tx.GasFeeCap())
 		result.GasTipCap = (*hexutil.Big)(tx.GasTipCap())
+		// if the transaction has been mined, compute the effective gas price
+		if baseFee != nil && blockHash != (common.Hash{}) {
+			// price = min(gasTipCap + baseFee, gasFeeCap)
+			result.GasPrice = (*hexutil.Big)(effectiveGasPrice(tx, baseFee))
+		} else {
+			result.GasPrice = (*hexutil.Big)(tx.GasFeeCap())
+		}
 
-		result.Sender = tx.Sender()
-		result.Signature = tx.Signature()
-		result.PaymasterData = tx.PaymasterData()
-		result.DeployerData = tx.DeployerData()
-		result.BuilderFee = (*hexutil.Big)(tx.BuilderFee())
-		result.ValidationGas = (hexutil.Uint64)(tx.ValidationGas())
-		result.PaymasterGas = (hexutil.Uint64)(tx.PaymasterGas())
-		result.PostOpGas = (hexutil.Uint64)(tx.PostOpGas())
-		result.BigNonce = (*hexutil.Big)(tx.BigNonce())
 	case types.Rip7560BundleHeaderType:
 		result.ChainID = (*hexutil.Big)(tx.ChainId())
 		result.TransactionCount = (hexutil.Uint64)(tx.TransactionCount())

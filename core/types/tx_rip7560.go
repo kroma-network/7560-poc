@@ -28,29 +28,26 @@ import (
 type Rip7560AccountAbstractionTx struct {
 	// overlapping fields
 	ChainID    *big.Int
+	Nonce      uint64
 	GasTipCap  *big.Int // a.k.a. maxPriorityFeePerGas
 	GasFeeCap  *big.Int // a.k.a. maxFeePerGas
 	Gas        uint64
-	Data       []byte
 	AccessList AccessList
 
 	// extra fields
-	Sender        *common.Address
-	Signature     []byte
-	Paymaster     *common.Address `rlp:"nil"`
-	PaymasterData []byte
-	Deployer      *common.Address `rlp:"nil"`
-	DeployerData  []byte
-	BuilderFee    *big.Int
-	ValidationGas uint64
-	PaymasterGas  uint64
-	PostOpGas     uint64
-	BigNonce      *big.Int
-
-	// removed fields
-	To    *common.Address `rlp:"nil"`
-	Nonce uint64
-	Value *big.Int
+	Sender                      *common.Address
+	AuthorizationData           []byte
+	ExecutionData               []byte
+	Paymaster                   *common.Address `rlp:"nil"`
+	PaymasterData               []byte
+	Deployer                    *common.Address `rlp:"nil"`
+	DeployerData                []byte
+	BuilderFee                  *big.Int
+	ValidationGasLimit          uint64
+	PaymasterValidationGasLimit uint64
+	PostOpGas                   uint64
+	// RIP-7712 two-dimensional nonce (optional), 192 bits
+	NonceKey *big.Int
 }
 
 func (tx *Rip7560AccountAbstractionTx) isSystemTx() bool { return false }
@@ -58,32 +55,30 @@ func (tx *Rip7560AccountAbstractionTx) isSystemTx() bool { return false }
 // copy creates a deep copy of the transaction data and initializes all fields.
 func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 	cpy := &Rip7560AccountAbstractionTx{
-		To:   copyAddressPtr(tx.To),
-		Data: common.CopyBytes(tx.Data),
-		Gas:  tx.Gas,
+		//To:   copyAddressPtr(tx.To),
+		ExecutionData: common.CopyBytes(tx.ExecutionData),
+		Nonce:         tx.Nonce,
+		NonceKey:      new(big.Int),
+		Gas:           tx.Gas,
 		// These are copied below.
 		AccessList: make(AccessList, len(tx.AccessList)),
-		Value:      new(big.Int),
-		ChainID:    new(big.Int),
-		GasTipCap:  new(big.Int),
-		GasFeeCap:  new(big.Int),
-		BigNonce:   new(big.Int),
+		//Value:      new(big.Int),
+		ChainID:   new(big.Int),
+		GasTipCap: new(big.Int),
+		GasFeeCap: new(big.Int),
 
-		Sender:        copyAddressPtr(tx.Sender),
-		Signature:     common.CopyBytes(tx.Signature),
-		Paymaster:     copyAddressPtr(tx.Paymaster),
-		PaymasterData: common.CopyBytes(tx.PaymasterData),
-		Deployer:      copyAddressPtr(tx.Deployer),
-		DeployerData:  common.CopyBytes(tx.DeployerData),
-		BuilderFee:    new(big.Int),
-		ValidationGas: tx.ValidationGas,
-		PaymasterGas:  tx.PaymasterGas,
-		PostOpGas:     tx.PostOpGas,
+		Sender:                      copyAddressPtr(tx.Sender),
+		AuthorizationData:           common.CopyBytes(tx.AuthorizationData),
+		Paymaster:                   copyAddressPtr(tx.Paymaster),
+		PaymasterData:               common.CopyBytes(tx.PaymasterData),
+		Deployer:                    copyAddressPtr(tx.Deployer),
+		DeployerData:                common.CopyBytes(tx.DeployerData),
+		BuilderFee:                  new(big.Int),
+		ValidationGasLimit:          tx.ValidationGasLimit,
+		PaymasterValidationGasLimit: tx.PaymasterValidationGasLimit,
+		PostOpGas:                   tx.PostOpGas,
 	}
 	copy(cpy.AccessList, tx.AccessList)
-	if tx.Value != nil {
-		cpy.Value.Set(tx.Value)
-	}
 	if tx.ChainID != nil {
 		cpy.ChainID.Set(tx.ChainID)
 	}
@@ -96,8 +91,8 @@ func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 	if tx.BuilderFee != nil {
 		cpy.BuilderFee.Set(tx.BuilderFee)
 	}
-	if tx.BigNonce != nil {
-		cpy.BigNonce.Set(tx.BigNonce)
+	if tx.NonceKey != nil {
+		cpy.NonceKey.Set(tx.NonceKey)
 	}
 	return cpy
 }
@@ -106,15 +101,19 @@ func (tx *Rip7560AccountAbstractionTx) copy() TxData {
 func (tx *Rip7560AccountAbstractionTx) txType() byte           { return Rip7560Type }
 func (tx *Rip7560AccountAbstractionTx) chainID() *big.Int      { return tx.ChainID }
 func (tx *Rip7560AccountAbstractionTx) accessList() AccessList { return tx.AccessList }
-func (tx *Rip7560AccountAbstractionTx) data() []byte           { return tx.Data }
+func (tx *Rip7560AccountAbstractionTx) data() []byte           { return make([]byte, 0) }
 func (tx *Rip7560AccountAbstractionTx) gas() uint64            { return tx.Gas }
 func (tx *Rip7560AccountAbstractionTx) gasFeeCap() *big.Int    { return tx.GasFeeCap }
 func (tx *Rip7560AccountAbstractionTx) gasTipCap() *big.Int    { return tx.GasTipCap }
 func (tx *Rip7560AccountAbstractionTx) gasPrice() *big.Int     { return tx.GasFeeCap }
-func (tx *Rip7560AccountAbstractionTx) value() *big.Int        { return tx.Value }
+func (tx *Rip7560AccountAbstractionTx) value() *big.Int        { return big.NewInt(0) }
 func (tx *Rip7560AccountAbstractionTx) nonce() uint64          { return tx.Nonce }
-func (tx *Rip7560AccountAbstractionTx) bigNonce() *big.Int     { return tx.BigNonce }
 func (tx *Rip7560AccountAbstractionTx) to() *common.Address    { return nil }
+
+// IsRip7712Nonce returns true if the transaction uses an RIP-7712 two-dimensional nonce
+func (tx *Rip7560AccountAbstractionTx) IsRip7712Nonce() bool {
+	return tx.NonceKey != nil && tx.NonceKey.Cmp(big.NewInt(0)) == 1
+}
 
 func (tx *Rip7560AccountAbstractionTx) effectiveGasPrice(dst *big.Int, baseFee *big.Int) *big.Int {
 	if baseFee == nil {
@@ -136,36 +135,48 @@ func (tx *Rip7560AccountAbstractionTx) setSignatureValues(chainID, v, r, s *big.
 }
 
 // encode the subtype byte and the payload-bearing bytes of the RIP-7560 transaction
-func (tx *Rip7560AccountAbstractionTx) encode(b *bytes.Buffer) error { return rlp.Encode(b, tx) }
+func (t *Rip7560AccountAbstractionTx) encode(b *bytes.Buffer) error {
+	zeroAddress := common.Address{}
+	tx := t.copy().(*Rip7560AccountAbstractionTx)
+	if tx.Paymaster != nil && zeroAddress.Cmp(*tx.Paymaster) == 0 {
+		tx.Paymaster = nil
+	}
+	if tx.Deployer != nil && zeroAddress.Cmp(*tx.Deployer) == 0 {
+		tx.Deployer = nil
+	}
+	return rlp.Encode(b, tx)
+}
 
 // decode the payload-bearing bytes of the encoded RIP-7560 transaction payload
 func (tx *Rip7560AccountAbstractionTx) decode(input []byte) error { return rlp.DecodeBytes(input, tx) }
 
 // Rip7560Transaction an equivalent of a solidity struct only used to encode the 'transaction' parameter
 type Rip7560Transaction struct {
-	Sender               common.Address
-	Nonce                *big.Int
-	ValidationGasLimit   *big.Int
-	PaymasterGasLimit    *big.Int
-	PostOpGasLimit       *big.Int
-	CallGasLimit         *big.Int
-	MaxFeePerGas         *big.Int
-	MaxPriorityFeePerGas *big.Int
-	BuilderFee           *big.Int
-	Paymaster            *common.Address
-	PaymasterData        []byte
-	Deployer             *common.Address
-	DeployerData         []byte
-	CallData             []byte
-	Signature            []byte
+	Sender                      common.Address
+	NonceKey                    *big.Int
+	Nonce                       *big.Int
+	ValidationGasLimit          *big.Int
+	PaymasterValidationGasLimit *big.Int
+	PostOpGasLimit              *big.Int
+	CallGasLimit                *big.Int
+	MaxFeePerGas                *big.Int
+	MaxPriorityFeePerGas        *big.Int
+	BuilderFee                  *big.Int
+	Paymaster                   common.Address
+	PaymasterData               []byte
+	Deployer                    common.Address
+	DeployerData                []byte
+	ExecutionData               []byte
+	AuthorizationData           []byte
 }
 
 func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 	structThing, _ := abi.NewType("tuple", "struct thing", []abi.ArgumentMarshaling{
 		{Name: "sender", Type: "address"},
+		{Name: "nonceKey", Type: "uint256"},
 		{Name: "nonce", Type: "uint256"},
 		{Name: "validationGasLimit", Type: "uint256"},
-		{Name: "paymasterGasLimit", Type: "uint256"},
+		{Name: "paymasterValidationGasLimit", Type: "uint256"},
 		{Name: "postOpGasLimit", Type: "uint256"},
 		{Name: "callGasLimit", Type: "uint256"},
 		{Name: "maxFeePerGas", Type: "uint256"},
@@ -175,8 +186,8 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 		{Name: "paymasterData", Type: "bytes"},
 		{Name: "deployer", Type: "address"},
 		{Name: "deployerData", Type: "bytes"},
-		{Name: "callData", Type: "bytes"},
-		{Name: "signature", Type: "bytes"},
+		{Name: "executionData", Type: "bytes"},
+		{Name: "authorizationData", Type: "bytes"},
 	})
 
 	args := abi.Arguments{
@@ -186,35 +197,28 @@ func (tx *Rip7560AccountAbstractionTx) AbiEncode() ([]byte, error) {
 	if tx.Paymaster == nil {
 		paymaster = &common.Address{}
 	}
-	paymasterData := tx.PaymasterData
-	if tx.PaymasterData == nil {
-		paymasterData = []byte{}
-	}
 	deployer := tx.Deployer
 	if tx.Deployer == nil {
 		deployer = &common.Address{}
 	}
-	deployerData := tx.DeployerData
-	if tx.DeployerData == nil {
-		deployerData = []byte{}
-	}
 
 	record := &Rip7560Transaction{
-		Sender:               *tx.Sender,
-		Nonce:                tx.BigNonce,
-		ValidationGasLimit:   big.NewInt(int64(tx.ValidationGas)),
-		PaymasterGasLimit:    big.NewInt(int64(tx.PaymasterGas)),
-		PostOpGasLimit:       big.NewInt(int64(tx.PostOpGas)),
-		CallGasLimit:         big.NewInt(int64(tx.Gas)),
-		MaxFeePerGas:         tx.GasFeeCap,
-		MaxPriorityFeePerGas: tx.GasTipCap,
-		BuilderFee:           tx.BuilderFee,
-		Paymaster:            paymaster,
-		PaymasterData:        paymasterData,
-		Deployer:             deployer,
-		DeployerData:         deployerData,
-		CallData:             tx.Data,
-		Signature:            tx.Signature,
+		Sender:                      *tx.Sender,
+		NonceKey:                    tx.NonceKey,
+		Nonce:                       big.NewInt(int64(tx.Nonce)),
+		ValidationGasLimit:          big.NewInt(int64(tx.ValidationGasLimit)),
+		PaymasterValidationGasLimit: big.NewInt(int64(tx.PaymasterValidationGasLimit)),
+		PostOpGasLimit:              big.NewInt(int64(tx.PostOpGas)),
+		CallGasLimit:                big.NewInt(int64(tx.Gas)),
+		MaxFeePerGas:                tx.GasFeeCap,
+		MaxPriorityFeePerGas:        tx.GasTipCap,
+		BuilderFee:                  tx.BuilderFee,
+		Paymaster:                   *paymaster,
+		PaymasterData:               tx.PaymasterData,
+		Deployer:                    *deployer,
+		DeployerData:                tx.DeployerData,
+		ExecutionData:               tx.ExecutionData,
+		AuthorizationData:           tx.AuthorizationData,
 	}
 	packed, err := args.Pack(&record)
 	return packed, err

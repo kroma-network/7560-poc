@@ -62,18 +62,17 @@ type txJSON struct {
 	Commitments []kzg4844.Commitment `json:"commitments,omitempty"`
 	Proofs      []kzg4844.Proof      `json:"proofs,omitempty"`
 
-	// RIP 7560 transaction fileds
-	SubType       *hexutil.Uint64 `json:"subType,omitempty"`
-	Sender        *common.Address `json:"sender,omitempty"`
-	Signature     *hexutil.Bytes  `json:"signature,omitempty"`
-	Paymaster     *common.Address `json:"paymaster,omitempty"`
-	PaymasterData *hexutil.Bytes  `json:"paymasterData,omitempty"`
-	Deployer      *common.Address `json:"deployer,omitempty"`
-	DeployerData  *hexutil.Bytes  `json:"deployerData,omitempty"`
-	BuilderFee    *hexutil.Big    `json:"builderFee,omitempty"`
-	ValidationGas *hexutil.Uint64 `json:"validationGas,omitempty"`
-	PaymasterGas  *hexutil.Uint64 `json:"paymasterGas,omitempty"`
-	PostOpGas     *hexutil.Uint64 `json:"postOpGas,omitempty"`
+	// RIP 7560 transaction fields
+	Sender            *common.Address `json:"sender,omitempty"`
+	AuthorizationData *hexutil.Bytes  `json:"authorizationData,omitempty"`
+	Paymaster         *common.Address `json:"paymaster,omitempty"`
+	PaymasterData     *hexutil.Bytes  `json:"paymasterData,omitempty"`
+	Deployer          *common.Address `json:"deployer,omitempty"`
+	DeployerData      *hexutil.Bytes  `json:"deployerData,omitempty"`
+	BuilderFee        *hexutil.Big    `json:"builderFee,omitempty"`
+	ValidationGas     *hexutil.Uint64 `json:"validationGas,omitempty"`
+	PaymasterGas      *hexutil.Uint64 `json:"paymasterGas,omitempty"`
+	PostOpGas         *hexutil.Uint64 `json:"postOpGas,omitempty"`
 
 	// RIP 7711 additional transaction field
 	BlockNumber      *hexutil.Big    `json:"blockNumber,omitempty"`
@@ -81,7 +80,7 @@ type txJSON struct {
 	TransactionIndex *hexutil.Uint64 `json:"transactionIndex,omitempty"`
 
 	// RIP 7712 additional transaction field
-	BigNonce *hexutil.Big `json:"bigNonce,omitempty"`
+	NonceKey *hexutil.Big `json:"nonceKey,omitempty"`
 
 	// Only used for encoding:
 	Hash common.Hash `json:"hash"`
@@ -198,27 +197,26 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		// other fields will show up as null.
 
 	case *Rip7560AccountAbstractionTx:
-		log.Info("Marshal Rip7560Type JSON")
 		enc.ChainID = (*hexutil.Big)(itx.ChainID)
 		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap)
 		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap)
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
-		enc.Input = (*hexutil.Bytes)(&itx.Data)
+		enc.Input = (*hexutil.Bytes)(&itx.ExecutionData)
 		enc.AccessList = &itx.AccessList
 		enc.Sender = itx.Sender
-		enc.Signature = (*hexutil.Bytes)(&itx.Signature)
+		enc.AuthorizationData = (*hexutil.Bytes)(&itx.AuthorizationData)
 		enc.Paymaster = itx.Paymaster
 		enc.PaymasterData = (*hexutil.Bytes)(&itx.PaymasterData)
 		enc.Deployer = itx.Deployer
 		enc.DeployerData = (*hexutil.Bytes)(&itx.DeployerData)
 		enc.BuilderFee = (*hexutil.Big)(itx.BuilderFee)
-		enc.ValidationGas = (*hexutil.Uint64)(&itx.ValidationGas)
-		enc.PaymasterGas = (*hexutil.Uint64)(&itx.PaymasterGas)
+		enc.ValidationGas = (*hexutil.Uint64)(&itx.ValidationGasLimit)
+		enc.PaymasterGas = (*hexutil.Uint64)(&itx.PaymasterValidationGasLimit)
 		enc.PostOpGas = (*hexutil.Uint64)(&itx.PostOpGas)
-		enc.BigNonce = (*hexutil.Big)(itx.BigNonce)
-		enc.To = tx.To()
 		enc.Nonce = (*hexutil.Uint64)(&itx.Nonce)
-		enc.Value = (*hexutil.Big)(itx.Value)
+		enc.To = tx.To()
+		enc.NonceKey = (*hexutil.Big)(itx.NonceKey)
+		enc.Value = (*hexutil.Big)(itx.value())
 	case *Rip7560BundleHeaderTx:
 		log.Info("Marshal Rip7560BundleHaederType JSON")
 		enc.ChainID = (*hexutil.Big)(itx.ChainID)
@@ -552,7 +550,7 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.Input == nil {
 			return errors.New("missing required field 'input' in transaction")
 		}
-		itx.Data = *dec.Input
+		itx.ExecutionData = *dec.Input
 		if dec.AccessList != nil {
 			itx.AccessList = *dec.AccessList
 		}
@@ -560,10 +558,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("sender value must not be nil")
 		}
 		itx.Sender = dec.Sender
-		if dec.Signature == nil {
+		if dec.AuthorizationData == nil {
 			return errors.New("missing required field 'signature' in transaction")
 		}
-		itx.Signature = *dec.Signature
+		itx.AuthorizationData = *dec.AuthorizationData
 		if dec.Paymaster != nil {
 			itx.Paymaster = dec.Paymaster
 		}
@@ -576,6 +574,9 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.DeployerData != nil {
 			itx.DeployerData = *dec.DeployerData
 		}
+		if dec.NonceKey == nil {
+			itx.NonceKey = (*big.Int)(dec.NonceKey)
+		}
 		if dec.BuilderFee == nil {
 			return errors.New("missing required field 'builderFee' for txdata")
 		}
@@ -583,19 +584,15 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.ValidationGas == nil {
 			return errors.New("missing required field 'validationGas' for txdata")
 		}
-		itx.ValidationGas = uint64(*dec.ValidationGas)
+		itx.ValidationGasLimit = uint64(*dec.ValidationGas)
 		if dec.PaymasterGas == nil {
 			return errors.New("missing required field 'payMasterGas' for txdata")
 		}
-		itx.PaymasterGas = uint64(*dec.PaymasterGas)
+		itx.PaymasterValidationGasLimit = uint64(*dec.PaymasterGas)
 		if dec.PostOpGas == nil {
 			return errors.New("missing required field 'postOpGas' for txdata")
 		}
 		itx.PostOpGas = uint64(*dec.PostOpGas)
-		itx.BigNonce = (*big.Int)(dec.BigNonce)
-		if dec.To != nil {
-			itx.To = dec.To
-		}
 		if dec.Nonce == nil {
 			return errors.New("missing required field 'nonce' in transaction")
 		}
@@ -603,7 +600,6 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 		if dec.Value == nil {
 			return errors.New("missing required field 'value' in transaction")
 		}
-		itx.Value = (*big.Int)(dec.Value)
 	case Rip7560BundleHeaderType:
 		var itx Rip7560BundleHeaderTx
 		inner = &itx

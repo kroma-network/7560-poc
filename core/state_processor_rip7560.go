@@ -1,7 +1,6 @@
 package core
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"github.com/ethereum/go-ethereum/accounts/abi"
@@ -177,7 +176,7 @@ func handleRip7560Transactions(transactions []*types.Transaction, index int, sta
 // todo 2: maybe handle the "shared gas pool" situation instead of just overriding it completely?
 func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, header *types.Header, tx *types.Transaction, state vm.StateDB, gasPrice *uint256.Int) (*uint256.Int, error) {
 	st := tx.Rip7560TransactionData()
-	gasLimit := st.Gas + st.ValidationGas + st.PaymasterGas + st.PostOpGas + params.Tx7560BaseGas
+	gasLimit := st.Gas + st.ValidationGasLimit + st.PaymasterValidationGasLimit + st.PostOpGas + params.Tx7560BaseGas
 	// Store prepaid values in gas units
 	preCharge := new(uint256.Int).SetUint64(gasLimit)
 	preCharge = preCharge.Mul(preCharge, gasPrice)
@@ -230,9 +229,12 @@ func refundPayer(vpr *ValidationPhaseResult, state vm.StateDB, gasUsed uint64, g
 // CheckNonceRip7560 prechecks nonce of transaction.
 // (standard preCheck function check both nonce and no-code of account)
 func CheckNonceRip7560(tx *types.Rip7560AccountAbstractionTx, st *state.StateDB) error {
-	// Make sure this transaction's nonce is correct.
+	// RIP-7712 two-dimensional nonce is checked on-chain
+	if tx.IsRip7712Nonce() {
+		return nil
+	}
 	stNonce := st.GetNonce(*tx.Sender)
-	if msgNonce := tx.BigNonce.Uint64(); stNonce < msgNonce {
+	if msgNonce := tx.Nonce; stNonce < msgNonce {
 		return fmt.Errorf("%w: address %v, tx: %d state: %d", ErrNonceTooHigh,
 			tx.Sender.Hex(), msgNonce, stNonce)
 	} else if stNonce > msgNonce {
@@ -249,6 +251,12 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 	var estimateFlag = false
 	if len(estimate) > 0 && estimate[0] {
 		estimateFlag = estimate[0]
+	}
+
+	aatx := tx.Rip7560TransactionData()
+	err := CheckNonceRip7560(aatx, statedb)
+	if err != nil {
+		return nil, err
 	}
 
 	gasPrice := new(big.Int).Add(header.BaseFee, tx.GasTipCap())
@@ -272,21 +280,20 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 
 	/*** Nonce Validation Frame ***/
 	var nonceValidationUsedGas uint64
-	nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
-	if nonceValidationMsg != nil {
+	if aatx.IsRip7712Nonce() {
+		if !chainConfig.IsRIP7712(header.Number) {
+			return nil, fmt.Errorf("RIP-7712 nonce is disabled")
+		}
+		nonceValidationMsg := prepareNonceValidationMessage(tx, chainConfig)
 		resultNonceManager, err := ApplyMessage(evm, nonceValidationMsg, gp)
 		if err != nil {
-			return nil, err
+			return nil, fmt.Errorf("RIP-7712 nonce validation failed: %w", err)
 		}
 		if resultNonceManager.Err != nil {
-			return nil, resultNonceManager.Err
+			return nil, fmt.Errorf("RIP-7712 nonce validation failed: %w", resultNonceManager.Err)
 		}
 		nonceValidationUsedGas = resultNonceManager.UsedGas
 	} else {
-		err := CheckNonceRip7560(tx.Rip7560TransactionData(), statedb)
-		if err != nil {
-			return nil, err
-		}
 		// Use legacy nonce validation
 		stNonce := statedb.GetNonce(*tx.Rip7560TransactionData().Sender)
 		if stNonce != 0 {
@@ -483,27 +490,24 @@ func ApplyRip7560ExecutionPhase(config *params.ChainConfig, vpr *ValidationPhase
 }
 
 func prepareNonceValidationMessage(baseTx *types.Transaction, chainConfig *params.ChainConfig) *Message {
+	// TODO: this can probably be done a lot easier, check syntax
 	tx := baseTx.Rip7560TransactionData()
-
-	// TODO(sm-stack): add error handling for bigNonce value over 32 bytes
-	key := make([]byte, 32)
-	fromBig, _ := uint256.FromBig(tx.BigNonce)
-	fromBig.WriteToSlice(key)
+	nonceKey := make([]byte, 24)
+	nonce := make([]byte, 8)
+	nonceKey256, _ := uint256.FromBig(tx.NonceKey)
+	nonce256 := uint256.NewInt(tx.Nonce)
+	nonceKey256.WriteToSlice(nonceKey)
+	nonce256.WriteToSlice(nonce)
 
 	nonceValidationData := make([]byte, 0)
 	nonceValidationData = append(nonceValidationData[:], tx.Sender.Bytes()...)
-	nonceValidationData = append(nonceValidationData[:], key...)
-
-	// Use legacy nonce validation if the key is all zeros
-	if bytes.Equal(key[:24], make([]byte, 24)) {
-		return nil
-	}
-
+	nonceValidationData = append(nonceValidationData[:], nonceKey...)
+	nonceValidationData = append(nonceValidationData[:], nonce...)
 	return &Message{
 		From:              chainConfig.EntryPointAddress,
 		To:                &chainConfig.NonceManagerAddress,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.ValidationGas,
+		GasLimit:          tx.ValidationGasLimit,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -523,7 +527,7 @@ func prepareDeployerMessage(baseTx *types.Transaction, config *params.ChainConfi
 		From:              config.DeployerCallerAddress,
 		To:                tx.Deployer,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.ValidationGas - nonceValidationUsedGas,
+		GasLimit:          tx.ValidationGasLimit - nonceValidationUsedGas,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -550,7 +554,7 @@ func prepareAccountValidationMessage(baseTx *types.Transaction, chainConfig *par
 		From:              chainConfig.EntryPointAddress,
 		To:                tx.Sender,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.ValidationGas - nonceValidationUsedGas - deploymentUsedGas,
+		GasLimit:          tx.ValidationGasLimit - nonceValidationUsedGas - deploymentUsedGas,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -581,7 +585,7 @@ func preparePaymasterValidationMessage(baseTx *types.Transaction, config *params
 		From:              config.EntryPointAddress,
 		To:                tx.Paymaster,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.PaymasterGas,
+		GasLimit:          tx.PaymasterValidationGasLimit,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
@@ -602,7 +606,7 @@ func prepareAccountExecutionMessage(baseTx *types.Transaction, config *params.Ch
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
-		Data:              tx.Data,
+		Data:              tx.ExecutionData,
 		AccessList:        make(types.AccessList, 0),
 		SkipAccountChecks: true,
 		IsRip7560Frame:    true,
@@ -630,7 +634,7 @@ func preparePostOpMessage(vpr *ValidationPhaseResult, chainConfig *params.ChainC
 		From:              chainConfig.EntryPointAddress,
 		To:                tx.Paymaster,
 		Value:             big.NewInt(0),
-		GasLimit:          tx.PaymasterGas - executionResult.UsedGas,
+		GasLimit:          tx.PaymasterValidationGasLimit - executionResult.UsedGas,
 		GasPrice:          tx.GasFeeCap,
 		GasFeeCap:         tx.GasFeeCap,
 		GasTipCap:         tx.GasTipCap,
