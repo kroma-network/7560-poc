@@ -243,8 +243,8 @@ func run(ctx context.Context, call *core.Message, opts *Options) (*core.Executio
 func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *Options, gasLimit uint64) (*core.ValidationPhaseResult, *state.StateDB, error) {
 	st := tx.Rip7560TransactionData()
 	// Configure the call for this specific execution (and revert the change after)
-	defer func(gas uint64) { st.ValidationGas = gas }(st.ValidationGas)
-	st.ValidationGas = gasLimit
+	defer func(gas uint64) { st.ValidationGasLimit = gas }(st.ValidationGasLimit)
+	st.ValidationGasLimit = gasLimit
 
 	// Execute the call and separate execution faults caused by a lack of gas or
 	// other non-fixable conditions
@@ -281,7 +281,7 @@ func executeRip7560Validation(ctx context.Context, tx *types.Transaction, opts *
 func EstimateRip7560Validation(ctx context.Context, tx *types.Transaction, opts *Options, gasCap uint64) (uint64, error) {
 	// Binary search the gas limit, as it may need to be higher than the amount used
 	st := tx.Rip7560TransactionData()
-	gasLimit := st.ValidationGas + st.PaymasterGas + params.Tx7560BaseGas
+	gasLimit := st.ValidationGasLimit + st.PaymasterValidationGasLimit + params.Tx7560BaseGas
 	var (
 		lo uint64 // lowest-known gas limit where tx execution fails
 		hi uint64 // lowest-known gas limit where tx execution succeeds

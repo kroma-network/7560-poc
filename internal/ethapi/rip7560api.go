@@ -30,7 +30,6 @@ func (s *TransactionAPI) SendRip7560TransactionsBundle(ctx context.Context, args
 	if len(args) == 0 {
 		return common.Hash{}, errors.New("submitted bundle has zero length")
 	}
-	log.Info("[RIP-7560] SendRip7560TransactionsBundle", "bundlerId", bundlerId)
 	txs := make([]*types.Transaction, len(args))
 	for i := 0; i < len(args); i++ {
 		txs[i] = args[i].toTransaction()
@@ -144,7 +143,7 @@ func doCallRip7560Validation(ctx context.Context, b Backend, args TransactionArg
 		return nil, fmt.Errorf("validation aborted (timeout = %v)", timeout)
 	}
 	if err != nil {
-		return result, fmt.Errorf("err: %w (supplied gas %d)", err, tx.Rip7560TransactionData().ValidationGas)
+		return result, fmt.Errorf("err: %w (supplied gas %d)", err, tx.Rip7560TransactionData().ValidationGasLimit)
 	}
 	return result, nil
 }
