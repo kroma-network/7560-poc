@@ -186,6 +186,7 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	L1CostFunc := types.NewL1CostFunc(chainConfig, state)
 	if L1CostFunc != nil {
 		l1Cost = L1CostFunc(tx.RollupCostData(), header.Time)
+		gasLimit += l1Cost.Uint64()
 		preCharge = preCharge.Add(preCharge, new(uint256.Int).SetUint64(l1Cost.Uint64()))
 	}
 
@@ -201,7 +202,7 @@ func BuyGasRip7560Transaction(chainConfig *params.ChainConfig, gp *GasPool, head
 	}
 
 	state.SubBalance(chargeFrom, preCharge)
-	err := gp.SubGas(preCharge.Uint64())
+	err := gp.SubGas(gasLimit)
 	if err != nil {
 		return nil, err
 	}
