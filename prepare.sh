@@ -44,4 +44,5 @@ echo "
 --metrics.addr=0.0.0.0
 --metrics.port=36060
 --miner.recommit=1s
+--config=circleciconfig.toml
 " | pbcopy

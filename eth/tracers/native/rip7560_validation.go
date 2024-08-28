@@ -340,7 +340,7 @@ func (t *rip7560ValidationTracer) GetResult() (json.RawMessage, error) {
 		return nil, errors.New("incorrect number of top-level calls")
 	}
 
-	if t.calls[len(t.calls)-1].Type == vm.STOP {
+	if len(t.calls) > 0 && t.calls[len(t.calls)-1].Type == vm.STOP {
 		t.calls[len(t.calls)-1].Error = "failed deposit transaction"
 	}
 
