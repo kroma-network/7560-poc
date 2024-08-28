@@ -323,8 +323,6 @@ func ApplyRip7560ValidationPhases(chainConfig *params.ChainConfig, bc ChainConte
 		if err != nil {
 			return nil, fmt.Errorf("account deployment failed: %v", err)
 		}
-		// TODO : would be handled inside IntrinsicGas
-		deploymentUsedGas = resultDeployer.UsedGas + params.TxGasContractCreation
 	}
 
 	/*** Account Validation Frame ***/
