@@ -65,14 +65,15 @@ type txJSON struct {
 	// RIP 7560 transaction fields
 	Sender            *common.Address `json:"sender,omitempty"`
 	AuthorizationData *hexutil.Bytes  `json:"authorizationData,omitempty"`
+	ExecutionData     *hexutil.Bytes  `json:"executionData,omitempty"`
 	Paymaster         *common.Address `json:"paymaster,omitempty"`
 	PaymasterData     *hexutil.Bytes  `json:"paymasterData,omitempty"`
 	Deployer          *common.Address `json:"deployer,omitempty"`
 	DeployerData      *hexutil.Bytes  `json:"deployerData,omitempty"`
 	BuilderFee        *hexutil.Big    `json:"builderFee,omitempty"`
-	ValidationGas     *hexutil.Uint64 `json:"validationGas,omitempty"`
-	PaymasterGas      *hexutil.Uint64 `json:"paymasterGas,omitempty"`
-	PostOpGas         *hexutil.Uint64 `json:"postOpGas,omitempty"`
+	ValidationGas     *hexutil.Uint64 `json:"verificationGasLimit,omitempty"`
+	PaymasterGas      *hexutil.Uint64 `json:"paymasterVerificationGasLimit,omitempty"`
+	PostOpGas         *hexutil.Uint64 `json:"paymasterPostOpGasLimit,omitempty"`
 
 	// RIP 7711 additional transaction field
 	BlockNumber      *hexutil.Big    `json:"blockNumber,omitempty"`
@@ -201,10 +202,10 @@ func (tx *Transaction) MarshalJSON() ([]byte, error) {
 		enc.MaxPriorityFeePerGas = (*hexutil.Big)(itx.GasTipCap)
 		enc.MaxFeePerGas = (*hexutil.Big)(itx.GasFeeCap)
 		enc.Gas = (*hexutil.Uint64)(&itx.Gas)
-		enc.Input = (*hexutil.Bytes)(&itx.ExecutionData)
 		enc.AccessList = &itx.AccessList
 		enc.Sender = itx.Sender
 		enc.AuthorizationData = (*hexutil.Bytes)(&itx.AuthorizationData)
+		enc.ExecutionData = (*hexutil.Bytes)(&itx.ExecutionData)
 		enc.Paymaster = itx.Paymaster
 		enc.PaymasterData = (*hexutil.Bytes)(&itx.PaymasterData)
 		enc.Deployer = itx.Deployer
@@ -547,10 +548,10 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'gas' for txdata")
 		}
 		itx.Gas = uint64(*dec.Gas)
-		if dec.Input == nil {
-			return errors.New("missing required field 'input' in transaction")
+		if dec.ExecutionData == nil {
+			return errors.New("missing required field 'executionData' in transaction")
 		}
-		itx.ExecutionData = *dec.Input
+		itx.ExecutionData = *dec.ExecutionData
 		if dec.AccessList != nil {
 			itx.AccessList = *dec.AccessList
 		}
@@ -558,10 +559,9 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("sender value must not be nil")
 		}
 		itx.Sender = dec.Sender
-		if dec.AuthorizationData == nil {
-			return errors.New("missing required field 'signature' in transaction")
+		if dec.AuthorizationData != nil {
+			itx.AuthorizationData = *dec.AuthorizationData
 		}
-		itx.AuthorizationData = *dec.AuthorizationData
 		if dec.Paymaster != nil {
 			itx.Paymaster = dec.Paymaster
 		}
