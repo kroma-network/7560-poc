@@ -585,14 +585,12 @@ func (tx *Transaction) UnmarshalJSON(input []byte) error {
 			return errors.New("missing required field 'validationGas' for txdata")
 		}
 		itx.ValidationGasLimit = uint64(*dec.ValidationGas)
-		if dec.PaymasterGas == nil {
-			return errors.New("missing required field 'payMasterGas' for txdata")
+		if dec.PaymasterGas != nil {
+			itx.PaymasterValidationGasLimit = uint64(*dec.PaymasterGas)
 		}
-		itx.PaymasterValidationGasLimit = uint64(*dec.PaymasterGas)
-		if dec.PostOpGas == nil {
-			return errors.New("missing required field 'postOpGas' for txdata")
+		if dec.PostOpGas != nil {
+			itx.PostOpGas = uint64(*dec.PostOpGas)
 		}
-		itx.PostOpGas = uint64(*dec.PostOpGas)
 		if dec.Nonce == nil {
 			return errors.New("missing required field 'nonce' in transaction")
 		}
